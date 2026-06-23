@@ -95,6 +95,9 @@ struct AgentTask: Identifiable, Codable, Equatable, Sendable {
     var lastTool: String? = nil
     /// One-line LLM note about what the session needs (from classify.py).
     var note: String? = nil
+    /// Raw provider session/thread id (no source prefix), used to deep-link
+    /// back into the owning app (e.g. codex://threads/<id>).
+    var sessionId: String? = nil
 }
 
 struct AgentSnapshot: Equatable, Sendable {

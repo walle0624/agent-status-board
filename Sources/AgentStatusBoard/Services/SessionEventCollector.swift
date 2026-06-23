@@ -55,6 +55,12 @@ struct SessionEventCollector: TaskCollecting {
             let title = names.name(forCwd: record.cwd)
                 ?? (record.title.isEmpty ? "\(source.displayName) 会话" : record.title)
 
+            // key is "<source>-<id>"; recover the raw provider session id.
+            let prefix = record.source + "-"
+            let rawId = record.key.hasPrefix(prefix)
+                ? String(record.key.dropFirst(prefix.count))
+                : record.key
+
             tasks.append(
                 AgentTask(
                     id: "event-\(record.key)",
@@ -67,7 +73,8 @@ struct SessionEventCollector: TaskCollecting {
                     evidence: file.path,
                     model: (record.model?.isEmpty == false) ? record.model : nil,
                     lastTool: (record.lastTool?.isEmpty == false) ? record.lastTool : nil,
-                    note: (record.summary?.isEmpty == false) ? record.summary : nil
+                    note: (record.summary?.isEmpty == false) ? record.summary : nil,
+                    sessionId: rawId.isEmpty ? nil : rawId
                 )
             )
         }

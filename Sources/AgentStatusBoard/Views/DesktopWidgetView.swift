@@ -31,6 +31,7 @@ struct DesktopWidgetView: View {
     @ObservedObject var store: BoardStore
     var onClose: () -> Void = {}
     var onTogglePin: () -> Void = {}
+    var onOpen: (AgentTask) -> Void = { _ in }
     var isPinned: Bool = true
 
     private var snapshot: AgentSnapshot { store.snapshot }
@@ -40,21 +41,30 @@ struct DesktopWidgetView: View {
     private var running: [AgentTask] {
         snapshot.visibleTasks.filter { $0.status == .running || $0.status == .thinking }
     }
-    private var doneCount: Int { snapshot.count(for: .done) }
+    /// Completed sessions in the snapshot window, newest first — listed under
+    /// "今日完成" at the bottom. Count equals the list length, so the number and
+    /// the detail always agree.
+    private var doneTasks: [AgentTask] {
+        snapshot.visibleTasks
+            .filter { $0.status == .done }
+            .sorted { $0.lastActivityAt > $1.lastActivityAt }
+    }
+    private var doneCount: Int { doneTasks.count }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             header
             if !attention.isEmpty {
-                attentionBlock           // red: needs you
+                attentionBlock                         // red hero: needs you
+                if !running.isEmpty { runningListBlock }   // keep running as a list
             } else if !running.isEmpty {
-                runningBlock             // amber: work in progress
-            } else {
-                calmState                // green: truly idle / done
+                runningBlock                           // amber hero: work in progress
             }
-            summaryRow
-            if !store.activity.isEmpty {
-                activityBlock
+            if doneCount > 0 {
+                todayDoneBlock                         // 今日完成 N + 明细列表
+            }
+            if attention.isEmpty && running.isEmpty && doneCount == 0 {
+                calmState                              // truly idle
             }
         }
         .padding(18)
@@ -159,22 +169,35 @@ struct DesktopWidgetView: View {
                     .foregroundStyle(Glass.textSecondary)
             }
             ForEach(attention.prefix(4)) { task in
-                HStack(alignment: .top, spacing: 9) {
-                    LEDDot(color: Glass.red, flashing: false).padding(.top, 3)
-                    VStack(alignment: .leading, spacing: 1) {
-                        HStack(spacing: 5) {
-                            Text(task.title.isEmpty ? "\(task.source.displayName) 会话" : task.title)
-                                .font(.system(size: 13)).foregroundStyle(Glass.textPrimary)
-                                .lineLimit(1)
-                            Text("· \(task.source.displayName)")
-                                .font(.system(size: 11)).foregroundStyle(Glass.textTertiary)
-                        }
-                        Text(reason(for: task))
+                sessionRow(task, color: Glass.red, detail: reason(for: task), detailLines: 2)
+            }
+        }
+    }
+
+    /// One session row: dot, title · source, a detail line, and a chevron. The
+    /// whole row opens the owning app/session on click.
+    @ViewBuilder
+    private func sessionRow(_ task: AgentTask, color: Color, detail: String, detailLines: Int) -> some View {
+        ClickableRow(onTap: { onOpen(task) }) {
+            HStack(alignment: .top, spacing: 9) {
+                LEDDot(color: color, flashing: false).padding(.top, 3)
+                VStack(alignment: .leading, spacing: 1) {
+                    HStack(spacing: 5) {
+                        Text(task.title.isEmpty ? "\(task.source.displayName) 会话" : task.title)
+                            .font(.system(size: 13)).foregroundStyle(Glass.textPrimary)
+                            .lineLimit(1)
+                        Text("· \(task.source.displayName)")
                             .font(.system(size: 11)).foregroundStyle(Glass.textTertiary)
-                            .lineLimit(2)
                     }
+                    Text(detail)
+                        .font(.system(size: 11)).foregroundStyle(Glass.textTertiary)
+                        .lineLimit(detailLines)
                 }
-                .padding(.vertical, 3)
+                Spacer(minLength: 4)
+                Image(systemName: "chevron.right")
+                    .font(.system(size: 10, weight: .semibold))
+                    .foregroundStyle(Glass.textTertiary)
+                    .padding(.top, 3)
             }
         }
     }
@@ -197,8 +220,9 @@ struct DesktopWidgetView: View {
         return base
     }
 
-    // MARK: running (hero, no attention)
+    // MARK: running
 
+    /// Big hero, shown when nothing needs attention.
     private var runningBlock: some View {
         VStack(alignment: .leading, spacing: 8) {
             HStack(alignment: .firstTextBaseline, spacing: 8) {
@@ -211,22 +235,20 @@ struct DesktopWidgetView: View {
                     .foregroundStyle(Glass.textSecondary)
             }
             ForEach(running.prefix(4)) { task in
-                HStack(alignment: .top, spacing: 9) {
-                    LEDDot(color: Glass.amber, flashing: false).padding(.top, 3)
-                    VStack(alignment: .leading, spacing: 1) {
-                        HStack(spacing: 5) {
-                            Text(task.title.isEmpty ? "\(task.source.displayName) 会话" : task.title)
-                                .font(.system(size: 13)).foregroundStyle(Glass.textPrimary)
-                                .lineLimit(1)
-                            Text("· \(task.source.displayName)")
-                                .font(.system(size: 11)).foregroundStyle(Glass.textTertiary)
-                        }
-                        Text(runningDetail(task))
-                            .font(.system(size: 11)).foregroundStyle(Glass.textTertiary)
-                            .lineLimit(1)
-                    }
-                }
-                .padding(.vertical, 3)
+                sessionRow(task, color: Glass.amber, detail: runningDetail(task), detailLines: 1)
+            }
+        }
+    }
+
+    /// Secondary list, shown under the attention hero so running sessions stay
+    /// visible as rows (never collapsed into a count) when something needs you.
+    private var runningListBlock: some View {
+        VStack(alignment: .leading, spacing: 5) {
+            Divider().overlay(Glass.hairline)
+            Text("正在执行 · \(running.count)")
+                .font(.system(size: 11)).foregroundStyle(Glass.textTertiary)
+            ForEach(running.prefix(4)) { task in
+                sessionRow(task, color: Glass.amber, detail: runningDetail(task), detailLines: 1)
             }
         }
     }
@@ -259,64 +281,72 @@ struct DesktopWidgetView: View {
         .padding(.vertical, 2)
     }
 
-    // MARK: summary
+    // MARK: today's completed
 
-    private var summaryRow: some View {
-        HStack(spacing: 16) {
-            // Running is the hero unless attention is present; only echo it here
-            // when attention has taken the hero slot, so it stays visible.
-            if !attention.isEmpty && !running.isEmpty {
-                summaryItem(Glass.amber, "正在执行", "\(running.count)")
-            }
-            if doneCount > 0 {
-                summaryItem(Glass.green, "今日完成", "\(doneCount)")
-            }
-            Spacer()
-        }
-        .padding(.top, 2)
-    }
-
-    private func summaryItem(_ color: Color, _ label: String, _ count: String) -> some View {
-        HStack(spacing: 7) {
-            LEDDot(color: color, flashing: false)
-            Text(label).font(.system(size: 12)).foregroundStyle(Glass.textSecondary)
-            Text(count).font(.system(size: 12, weight: .medium)).foregroundStyle(Glass.textPrimary)
-                .monospacedDigit()
-        }
-    }
-
-    // MARK: activity
-
-    private var activityBlock: some View {
+    /// "今日完成 N" plus a detail list of completed sessions (newest first),
+    /// each row clickable to reopen. The count equals the listed total.
+    private var todayDoneBlock: some View {
         VStack(alignment: .leading, spacing: 5) {
             Divider().overlay(Glass.hairline)
-            Text("最近活动").font(.system(size: 11)).foregroundStyle(Glass.textTertiary)
-            ForEach(store.activity.prefix(4)) { entry in
-                HStack(spacing: 8) {
-                    Text(Self.hhmm.string(from: entry.at))
-                        .font(.system(size: 11).monospacedDigit())
-                        .foregroundStyle(Glass.textTertiary)
-                        .frame(width: 32, alignment: .leading)
-                    LEDDot(color: dotColor(entry.status), flashing: false, size: 7)
-                    Text("\(entry.source.displayName) \(entry.status.displayName) — \(entry.title)")
-                        .font(.system(size: 12)).foregroundStyle(Glass.textSecondary)
-                        .lineLimit(1)
-                }
+            Text("今日完成 · \(doneCount)")
+                .font(.system(size: 11)).foregroundStyle(Glass.textTertiary)
+            ForEach(doneTasks.prefix(6)) { task in
+                sessionRow(task, color: Glass.green, detail: doneDetail(task), detailLines: 1)
+            }
+            if doneCount > 6 {
+                Text("…还有 \(doneCount - 6) 个")
+                    .font(.system(size: 11)).foregroundStyle(Glass.textTertiary)
+                    .padding(.leading, 2)
             }
         }
     }
 
-    private func dotColor(_ s: AgentTaskStatus) -> Color {
-        switch s {
-        case .running, .thinking: Glass.amber
-        case .done: Glass.green
-        default: Glass.red
+    /// Detail line for a completed row: when it finished, plus the LLM summary
+    /// of what happened (falling back to the workspace path).
+    private func doneDetail(_ task: AgentTask) -> String {
+        var parts = [timeAgo(task.lastActivityAt)]
+        if let n = task.note, !n.isEmpty {
+            parts.append(n)
+        } else if let w = task.workspace, !w.isEmpty {
+            parts.append((w as NSString).abbreviatingWithTildeInPath)
         }
+        return parts.joined(separator: " · ")
     }
 
-    private static let hhmm: DateFormatter = {
-        let f = DateFormatter(); f.dateFormat = "HH:mm"; return f
-    }()
+    /// Short relative time like "刚刚" / "3 分钟前" / "2 小时前", per the snapshot.
+    private func timeAgo(_ date: Date) -> String {
+        let secs = Int(snapshot.refreshedAt.timeIntervalSince(date))
+        if secs < 60 { return "刚刚" }
+        let mins = secs / 60
+        if mins < 60 { return "\(mins) 分钟前" }
+        return "\(mins / 60) 小时前"
+    }
+}
+
+/// A full-width row that opens the owning session on click, with a subtle hover
+/// highlight and a pointing-hand cursor as the affordance. Dragging the widget
+/// still works from the header and the empty areas between rows.
+private struct ClickableRow<Content: View>: View {
+    let onTap: () -> Void
+    @ViewBuilder var content: () -> Content
+    @State private var hover = false
+
+    var body: some View {
+        content()
+            .padding(.vertical, 5)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(
+                RoundedRectangle(cornerRadius: 9, style: .continuous)
+                    .fill(Color.white.opacity(hover ? 0.07 : 0))
+                    .padding(.horizontal, -8)   // bleed the highlight outward only
+            )
+            .contentShape(Rectangle())
+            .onTapGesture(perform: onTap)
+            .onHover { h in
+                hover = h
+                if h { NSCursor.pointingHand.push() } else { NSCursor.pop() }
+            }
+    }
 }
 
 private struct LEDDot: View {
