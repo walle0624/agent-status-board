@@ -13,6 +13,10 @@ final class BoardStore: ObservableObject {
     /// Codex / Claude Code 5-hour + weekly usage, refreshed slower than sessions.
     @Published private(set) var codexUsage: ProviderUsage?
     @Published private(set) var claudeUsage: ProviderUsage?
+    /// Whether each tool is present locally — a tool the user doesn't have gets
+    /// no usage row at all.
+    @Published private(set) var codexAvailable = false
+    @Published private(set) var claudeAvailable = false
 
     private let collectors: [any TaskCollecting]
     private let activityLog = ActivityLog()
@@ -65,13 +69,29 @@ final class BoardStore: ObservableObject {
         snapshot = AgentSnapshot(tasks: deduplicate(collected), refreshedAt: now)
         activity = activityLog.recent(limit: 30)
         isRefreshing = false
+        updateAvailability()
         refreshUsageIfDue(now: now)
+    }
+
+    /// Detect whether Codex / Claude Code are present locally, so we only show a
+    /// tool's usage when the user actually has it. Cheap existence checks.
+    private func updateAvailability() {
+        let fm = FileManager.default
+        let home = fm.homeDirectoryForCurrentUser
+        func exists(_ rel: String) -> Bool { fm.fileExists(atPath: home.appendingPathComponent(rel).path) }
+        // Codex: its logged-in state file is what live usage needs.
+        codexAvailable = exists(".codex/auth.json")
+        // Claude Code: a usage token set up, or any local CC transcript (i.e.
+        // the user actually uses CC). Just having the chat app doesn't count.
+        let ccProjects = (try? fm.contentsOfDirectory(
+            atPath: home.appendingPathComponent(".claude/projects").path))?.isEmpty == false
+        claudeAvailable = exists(".agent-status-board/cc-token.json") || ccProjects
     }
 
     /// Usage changes slowly; reparse the latest rollout at most every ~25s, off
     /// the main thread, and publish the result without blocking the session loop.
     private func refreshUsageIfDue(now: Date) {
-        if now.timeIntervalSince(lastUsageAt) > 60 {
+        if codexAvailable, now.timeIntervalSince(lastUsageAt) > 60 {
             lastUsageAt = now
             let collector = usageCollector
             Task.detached(priority: .utility) { [weak self] in
@@ -84,7 +104,7 @@ final class BoardStore: ObservableObject {
         }
         // CC usage costs a tiny inference ping, so poll it much less often and
         // keep the last good value across transient failures.
-        if now.timeIntervalSince(lastClaudeUsageAt) > 300 {
+        if claudeAvailable, now.timeIntervalSince(lastClaudeUsageAt) > 300 {
             lastClaudeUsageAt = now
             let collector = usageCollector
             Task.detached(priority: .utility) { [weak self] in

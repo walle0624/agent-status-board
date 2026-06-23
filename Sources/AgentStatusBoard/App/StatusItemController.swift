@@ -73,64 +73,54 @@ final class StatusItemController: NSObject, NSPopoverDelegate {
         statusItem.button?.image = renderImage(status: status, count: count, time: CACurrentMediaTime())
     }
 
-    private func alphas(for status: BoardOverallStatus, time t: Double) -> (Double, Double, Double) {
-        let dim = 0.18
-        func wave(_ period: Double, _ phase: Double = 0) -> Double {
-            0.35 + 0.55 * (0.5 + 0.5 * sin(2 * .pi * t / period + phase))
-        }
+    /// Aggregate state → one dot color + an animated alpha (flash / breathe).
+    private func dotStyle(_ status: BoardOverallStatus, _ t: Double) -> (color: NSColor, alpha: CGFloat) {
+        func breathe(_ period: Double) -> CGFloat { CGFloat(0.5 + 0.5 * sin(2 * .pi * t / period)) }
         switch status {
-        case .idle:
-            return (dim, dim, dim)
+        case .idle:           return (NSColor.secondaryLabelColor, 0.45)
         case .needsAttention:
-            let on = t.truncatingRemainder(dividingBy: 0.5) < 0.25   // 2Hz flash
-            return (on ? 1.0 : 0.25, dim, dim)
-        case .running:
-            return (dim, wave(0.9), wave(0.9, .pi))                   // amber/green marquee
-        case .thinking:
-            return (dim, 0.30 + 0.70 * (0.5 + 0.5 * sin(2 * .pi * t / 1.5)), dim)
-        case .done:
-            return (dim, dim, 1.0)
+            let on = t.truncatingRemainder(dividingBy: 0.6) < 0.3      // ~1.7 Hz flash
+            return (red, on ? 1.0 : 0.4)
+        case .running:        return (amber, 0.6 + 0.4 * breathe(1.1))
+        case .thinking:       return (amber, 0.45 + 0.5 * breathe(1.7))
+        case .done:           return (green, 1.0)
         }
     }
 
-    private func renderImage(status: BoardOverallStatus, count: Int, time: Double) -> NSImage {
-        let d: CGFloat = 8                 // LED diameter
-        let gap: CGFloat = 5
-        let padX: CGFloat = 6
+    /// A single glossy status sphere (radial highlight + faint rim) plus the
+    /// active-session count — cleaner in the menu bar than three flat dots.
+    private func renderImage(status: BoardOverallStatus, count: Int, time t: Double) -> NSImage {
+        let d: CGFloat = 12
         let h: CGFloat = 18
-        let ledsWidth = d * 3 + gap * 2
+        let padX: CGFloat = 5
         let showCount = count > 0
         let countText = showCount ? "\(count)" : ""
-        let font = NSFont.systemFont(ofSize: 11, weight: .medium)
+        let font = NSFont.systemFont(ofSize: 11, weight: .semibold)
         let textWidth: CGFloat = showCount
-            ? (countText as NSString).size(withAttributes: [.font: font]).width + 5
-            : 0
-        let w = padX * 2 + ledsWidth + textWidth
+            ? (countText as NSString).size(withAttributes: [.font: font]).width + 4 : 0
+        let w = padX * 2 + d + textWidth
 
-        let (ra, aa, ga) = alphas(for: status, time: time)
-        let colors = [red.withAlphaComponent(ra), amber.withAlphaComponent(aa), green.withAlphaComponent(ga)]
-
+        let (color, alpha) = dotStyle(status, t)
         let image = NSImage(size: NSSize(width: w, height: h))
         image.lockFocus()
-        let y = (h - d) / 2
-        for (i, color) in colors.enumerated() {
-            let x = padX + CGFloat(i) * (d + gap)
-            color.setFill()
-            NSBezierPath(ovalIn: NSRect(x: x, y: y, width: d, height: d)).fill()
-        }
+        let rect = NSRect(x: padX, y: (h - d) / 2, width: d, height: d)
+
+        // Glossy sphere: radial gradient, highlight pulled to the upper-left.
+        let top = NSColor.white.withAlphaComponent(0.55 * alpha)
+        let mid = color.withAlphaComponent(alpha)
+        let bottom = (color.blended(withFraction: 0.22, of: .black) ?? color).withAlphaComponent(alpha)
+        NSGradient(colors: [top, mid, bottom])?
+            .draw(in: NSBezierPath(ovalIn: rect), relativeCenterPosition: NSPoint(x: -0.32, y: 0.4))
+        NSColor.black.withAlphaComponent(0.18 * alpha).setStroke()
+        let rim = NSBezierPath(ovalIn: rect.insetBy(dx: 0.4, dy: 0.4)); rim.lineWidth = 0.6; rim.stroke()
+
         if showCount {
-            let attrs: [NSAttributedString.Key: Any] = [
-                .font: font,
-                .foregroundColor: NSColor.labelColor
-            ]
+            let attrs: [NSAttributedString.Key: Any] = [.font: font, .foregroundColor: NSColor.labelColor]
             let size = (countText as NSString).size(withAttributes: attrs)
-            (countText as NSString).draw(
-                at: NSPoint(x: padX + ledsWidth + 5, y: (h - size.height) / 2),
-                withAttributes: attrs
-            )
+            (countText as NSString).draw(at: NSPoint(x: padX + d + 4, y: (h - size.height) / 2), withAttributes: attrs)
         }
         image.unlockFocus()
-        image.isTemplate = false           // keep LED colors
+        image.isTemplate = false
         return image
     }
 }

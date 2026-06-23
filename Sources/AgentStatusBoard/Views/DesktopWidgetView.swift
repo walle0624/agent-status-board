@@ -74,8 +74,8 @@ struct DesktopWidgetView: View {
             if attention.isEmpty && running.isEmpty && doneCount == 0 {
                 calmState                              // truly idle
             }
-            if store.codexUsage != nil || store.claudeUsage != nil {
-                usageBlock                             // CC + Codex 5 小时 / 周 用量
+            if store.claudeAvailable || store.codexUsage != nil {
+                usageBlock                             // 仅显示本机装了的工具的用量
             }
         }
         .padding(18)
@@ -358,11 +358,13 @@ struct DesktopWidgetView: View {
                 legendItem(Glass.amber, "偏高")
                 legendItem(Glass.red, "耗尽")
             }
-            if let u = store.claudeUsage {
-                usageProvider("CC", u)
-            } else {
-                Text("CC · 用量获取中…（首次约几秒；长期为空则检查 cc-token.json）")
-                    .font(.system(size: 10)).foregroundStyle(Glass.textTertiary)
+            if store.claudeAvailable {
+                if let u = store.claudeUsage {
+                    usageProvider("CC", u)
+                } else {
+                    Text("CC · 用量获取中…（首次约几秒；长期为空则检查 cc-token.json）")
+                        .font(.system(size: 10)).foregroundStyle(Glass.textTertiary)
+                }
             }
             if let u = store.codexUsage {
                 usageProvider("Codex", u)
