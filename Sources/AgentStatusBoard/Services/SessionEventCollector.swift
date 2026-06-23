@@ -35,6 +35,13 @@ struct SessionEventCollector: TaskCollecting {
         decoder.dateDecodingStrategy = .iso8601WithFractionalSeconds
         let names = SessionNames()
 
+        // Hide sessions whose underlying artifact is gone — a CC session the
+        // user deleted (its transcript removed) or a Codex session they archived
+        // (its rollout moved out of ~/.codex/sessions/). Built once per pass;
+        // an empty set means the listing failed, so we fail open (show).
+        let liveCC = Self.liveClaudeSessionIds()
+        let liveCodex = Self.liveCodexRolloutIds()
+
         var tasks: [AgentTask] = []
         for file in files where file.pathExtension == "json" {
             guard let data = try? Data(contentsOf: file),
@@ -61,6 +68,16 @@ struct SessionEventCollector: TaskCollecting {
                 ? String(record.key.dropFirst(prefix.count))
                 : record.key
 
+            // Drop sessions the user deleted/archived (artifact no longer present).
+            switch source {
+            case .claudeCode:
+                if !liveCC.isEmpty, !rawId.isEmpty, !liveCC.contains(rawId) { continue }
+            case .codex:
+                if !liveCodex.isEmpty, !rawId.isEmpty, !liveCodex.contains(rawId) { continue }
+            default:
+                break
+            }
+
             tasks.append(
                 AgentTask(
                     id: "event-\(record.key)",
@@ -79,6 +96,44 @@ struct SessionEventCollector: TaskCollecting {
             )
         }
         return tasks
+    }
+
+    /// Session ids that still have a Claude Code transcript on disk
+    /// (~/.claude/projects/<cwd>/<id>.jsonl). A deleted session loses its file.
+    private static func liveClaudeSessionIds() -> Set<String> {
+        let fm = FileManager.default
+        let projects = fm.homeDirectoryForCurrentUser.appendingPathComponent(".claude/projects")
+        guard let dirs = try? fm.contentsOfDirectory(
+            at: projects, includingPropertiesForKeys: nil, options: [.skipsHiddenFiles]
+        ) else { return [] }
+        var ids = Set<String>()
+        for dir in dirs {
+            guard let files = try? fm.contentsOfDirectory(
+                at: dir, includingPropertiesForKeys: nil, options: [.skipsHiddenFiles]
+            ) else { continue }
+            for f in files where f.pathExtension == "jsonl" {
+                ids.insert(f.deletingPathExtension().lastPathComponent)
+            }
+        }
+        return ids
+    }
+
+    /// UUIDs of Codex rollouts still under ~/.codex/sessions/. Archiving a
+    /// session moves its rollout to ~/.codex/archived_sessions/, so it drops out.
+    private static func liveCodexRolloutIds() -> Set<String> {
+        let base = FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent(".codex/sessions")
+        guard let en = FileManager.default.enumerator(
+            at: base, includingPropertiesForKeys: nil, options: [.skipsHiddenFiles]
+        ) else { return [] }
+        var ids = Set<String>()
+        for case let url as URL in en {
+            let name = url.lastPathComponent
+            guard name.hasPrefix("rollout-"), name.hasSuffix(".jsonl") else { continue }
+            let stem = name.dropLast(6)                 // strip ".jsonl"
+            if stem.count >= 36 { ids.insert(String(stem.suffix(36))) }   // trailing uuid
+        }
+        return ids
     }
 
     private static func summary(for status: AgentTaskStatus) -> String {
