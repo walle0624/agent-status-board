@@ -104,7 +104,7 @@ bash ~/.agent-status-board/bin/cc-token-setup.sh
 - 脚本会自动找 `claude` CLI；找不到就用 Claude 桌面端内置的 CLI。若两者都没有，提示用户安装 Claude Code（桌面端或 `npm i -g @anthropic-ai/claude-code`）。
 - token 长期有效。**若以后 CC 用量长期不更新**，重跑此脚本刷新即可。
 
-> **Codex 用量无需任何配置**：自动读本地 `~/.codex/sessions` 里最新 rollout 文件，开箱即用。
+> **Codex 用量无需任何配置**：自动调 Codex 自己的实时用量端点（`chatgpt.com/backend-api/wham/usage`，认证读 `~/.codex/auth.json` 的登录态；失败才回退本地 rollout 快照），开箱即用。
 
 ---
 
@@ -138,5 +138,6 @@ bash script/agent-hooks/uninstall.sh        # 还原 CC/Codex 配置，移除 bi
 ## 架构（供你理解，不必照做）
 
 - 生命周期 hooks 把每个会话状态写成 `~/.agent-status-board/sessions/<source>-<id>.json`，Swift 端每 3s 读取并渲染。
-- 用量：**Codex** 读最新 rollout 的 `token_count → rate_limits`（primary=5h、secondary=周）；**CC** 用 token ping `/v1/messages`，读 `anthropic-ratelimit-unified-5h/7d-utilization|reset` 响应头。
+- 用量：**Codex** 实时 GET `https://chatgpt.com/backend-api/wham/usage`（认证用 `~/.codex/auth.json` 的 token，免费非推理；失败回退本地 rollout 快照的 `token_count → rate_limits`）；**CC** 用 token ping `/v1/messages`，读 `anthropic-ratelimit-unified-5h/7d-utilization|reset` 响应头。
+- 已删除的 CC 会话 / 已归档的 Codex 会话会自动从面板隐藏（按底层 transcript / rollout 是否还在判断；恢复后自动重新显示）。
 - 更多技术细节见同目录 `README.md`。
