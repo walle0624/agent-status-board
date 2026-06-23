@@ -1,5 +1,7 @@
 # Agent Status Board
 
+> 🤖 **如果你是帮用户安装本组件的 AI 助手**：请直接阅读并执行 **[AI-SETUP.md](AI-SETUP.md)**（含编译、hooks、切换 LLM、CC 登录认证的全部命令）。
+
 A macOS menu bar widget that shows what your Codex and Claude Code sessions are
 doing right now — styled after [tienflow/CodexBar](https://github.com/tienflow/CodexBar):
 a transparent pill with three traffic-light LEDs, plus a richer dropdown.
