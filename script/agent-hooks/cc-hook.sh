@@ -47,6 +47,8 @@ case "$EVENT" in
     ;;
   Stop)
     "$REC" --source claudeCode --id "$id" --status done --title "$proj" --cwd "$cwd" --model "$model" --activity
+    # Background LLM classify: is this finished turn actually waiting on the user?
+    nohup python3 "$DIR/classify.py" claudeCode "$id" "$tx" >/dev/null 2>&1 &
     ;;
   SessionEnd)
     "$REC" --source claudeCode --id "$id" --status gone

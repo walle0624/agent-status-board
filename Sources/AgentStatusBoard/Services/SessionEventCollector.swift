@@ -66,7 +66,8 @@ struct SessionEventCollector: TaskCollecting {
                     summary: Self.summary(for: status),
                     evidence: file.path,
                     model: (record.model?.isEmpty == false) ? record.model : nil,
-                    lastTool: (record.lastTool?.isEmpty == false) ? record.lastTool : nil
+                    lastTool: (record.lastTool?.isEmpty == false) ? record.lastTool : nil,
+                    note: (record.summary?.isEmpty == false) ? record.summary : nil
                 )
             )
         }
@@ -93,4 +94,5 @@ private struct SessionEventRecord: Decodable, Sendable {
     let updatedAt: Date
     let model: String?
     let lastTool: String?
+    let summary: String?
 }

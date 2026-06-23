@@ -40,7 +40,7 @@ IDX="$HOME/.codex/session_index.jsonl"
 title="$(grep -F "$id" "$IDX" 2>/dev/null | tail -1 | jq -r '.thread_name // empty' 2>/dev/null)"
 [ -z "$title" ] && title="Codex 会话"
 
-# A finished Codex turn = a result is ready for you to look at -> green/done.
+# A finished Codex turn = done. (The notify event only ever means "turn ended".)
 "$REC" --source codex --id "$id" --status done --title "$title" --activity || true
 
 exit 0

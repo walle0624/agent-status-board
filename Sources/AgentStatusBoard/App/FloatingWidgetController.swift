@@ -1,27 +1,33 @@
 import AppKit
 import SwiftUI
 
-/// Owns the desktop floating widget: a borderless, transparent, draggable,
-/// always-on-top window hosting DesktopWidgetView.
+/// Owns the desktop floating widget: a borderless, transparent, draggable
+/// panel hosting DesktopWidgetView.
 @MainActor
 final class FloatingWidgetController: NSObject, NSWindowDelegate {
     private let store: BoardStore
     private var window: NSWindow?
     private let originKey = "widgetOrigin"
-    /// false (default) → sits on the desktop behind other windows, like a macOS
-    /// desktop widget; true → floats on top of everything.
+    /// false (default) → a normal window the active app covers; true → floats
+    /// on top of everything.
     private var pinned = false
-
-    /// Just above the wallpaper, below all normal app windows.
-    private let desktopLevel = NSWindow.Level(rawValue: Int(CGWindowLevelForKey(.desktopWindow)) + 1)
 
     init(store: BoardStore) {
         self.store = store
         super.init()
     }
 
+    /// Unpinned → a normal draggable window that the app you're working in
+    /// covers, so it never sits on top of everything. Pinned (📌) → floats
+    /// above all windows and follows you across every space.
     private func applyLevel(_ window: NSWindow) {
-        window.level = pinned ? .floating : desktopLevel
+        if pinned {
+            window.level = .floating
+            window.collectionBehavior = [.canJoinAllSpaces, .stationary, .ignoresCycle]
+        } else {
+            window.level = .normal
+            window.collectionBehavior = [.stationary, .ignoresCycle]
+        }
     }
 
     func show() {
@@ -29,18 +35,21 @@ final class FloatingWidgetController: NSObject, NSWindowDelegate {
             window.makeKeyAndOrderFront(nil)
             return
         }
-        let window = NSWindow(
+        // A non-activating panel can be dragged to reposition without stealing
+        // focus from the app you're working in.
+        let window = NSPanel(
             contentRect: NSRect(x: 0, y: 0, width: 324, height: 360),
-            styleMask: [.borderless],
+            styleMask: [.borderless, .nonactivatingPanel],
             backing: .buffered,
             defer: false
         )
         window.isOpaque = false
         window.backgroundColor = .clear
         window.hasShadow = false                      // SwiftUI draws its own
-        applyLevel(window)
+        window.becomesKeyOnlyIfNeeded = true          // clicks/drags don't grab focus
+        window.hidesOnDeactivate = false
         window.isMovableByWindowBackground = true     // drag anywhere
-        window.collectionBehavior = [.canJoinAllSpaces, .stationary, .ignoresCycle]
+        applyLevel(window)
 
         let root = DesktopWidgetView(
             store: store,

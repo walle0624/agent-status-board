@@ -16,8 +16,7 @@ final class BoardStore: ObservableObject {
     private var timer: Timer?
 
     init(collectors: [any TaskCollecting] = [
-        SessionEventCollector(),
-        CodexRunningCollector()
+        SessionEventCollector()
     ]) {
         self.collectors = collectors
     }

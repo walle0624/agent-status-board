@@ -93,6 +93,8 @@ struct AgentTask: Identifiable, Codable, Equatable, Sendable {
     let evidence: String
     var model: String? = nil
     var lastTool: String? = nil
+    /// One-line LLM note about what the session needs (from classify.py).
+    var note: String? = nil
 }
 
 struct AgentSnapshot: Equatable, Sendable {

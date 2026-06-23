@@ -57,27 +57,34 @@ struct DesktopWidgetView: View {
                 activityBlock
             }
         }
-        .padding(16)
-        .frame(width: 304, alignment: .leading)
+        .padding(18)
+        .frame(width: 312, alignment: .leading)
         .background(
             ZStack {
                 VisualEffectView(material: .hudWindow)
-                Color.black.opacity(0.52)
+                // Glassy depth: a richer dark base for the "liquid glass" look.
+                LinearGradient(
+                    colors: [Color(.sRGB, red: 0.10, green: 0.11, blue: 0.13).opacity(0.50),
+                             Color(.sRGB, red: 0.06, green: 0.07, blue: 0.09).opacity(0.66)],
+                    startPoint: .top, endPoint: .bottom
+                )
             }
         )
-        .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
+        .clipShape(RoundedRectangle(cornerRadius: 24, style: .continuous))
         .overlay(
-            RoundedRectangle(cornerRadius: 18, style: .continuous)
+            RoundedRectangle(cornerRadius: 24, style: .continuous)
                 .strokeBorder(
                     LinearGradient(
-                        colors: [Color.white.opacity(0.22), Color.white.opacity(0.04)],
+                        colors: [Color.white.opacity(0.16), Color.white.opacity(0.03)],
                         startPoint: .top, endPoint: .bottom
                     ),
-                    lineWidth: 0.8
+                    lineWidth: 0.6
                 )
         )
-        .shadow(color: .black.opacity(0.35), radius: 16, y: 8)
-        .padding(12)
+        // Tight contact shadow only. Must stay well inside the outer padding
+        // below, or the window edge clips it into a hard rectangular line.
+        .shadow(color: .black.opacity(0.28), radius: 8, y: 4)
+        .padding(22)
     }
 
     // MARK: header
@@ -164,16 +171,17 @@ struct DesktopWidgetView: View {
                         }
                         Text(reason(for: task))
                             .font(.system(size: 11)).foregroundStyle(Glass.textTertiary)
-                            .lineLimit(1)
+                            .lineLimit(2)
                     }
                 }
-                .padding(.horizontal, 9).padding(.vertical, 7)
-                .background(RoundedRectangle(cornerRadius: 10).fill(Glass.red.opacity(0.10)))
+                .padding(.vertical, 3)
             }
         }
     }
 
     private func reason(for task: AgentTask) -> String {
+        // Prefer the LLM-written note about what it's waiting for.
+        if let n = task.note, !n.isEmpty { return n }
         var base: String
         switch task.status {
         case .waitingReview: base = "等待你的输入或授权"
@@ -218,8 +226,7 @@ struct DesktopWidgetView: View {
                             .lineLimit(1)
                     }
                 }
-                .padding(.horizontal, 9).padding(.vertical, 7)
-                .background(RoundedRectangle(cornerRadius: 10).fill(Glass.amber.opacity(0.10)))
+                .padding(.vertical, 3)
             }
         }
     }
