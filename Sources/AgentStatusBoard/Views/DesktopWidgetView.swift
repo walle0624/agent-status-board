@@ -379,6 +379,10 @@ struct DesktopWidgetView: View {
 
     private func usageProvider(_ name: String, _ u: ProviderUsage) -> some View {
         let peak = max(u.short?.usedPercent ?? 0, u.long?.usedPercent ?? 0)
+        // The reading is a point-in-time snapshot: CC re-pings every few minutes,
+        // but Codex only updates when it makes a request, so an idle Codex goes
+        // stale. Mark it so the number isn't read as live.
+        let stale = u.snapshotAt.timeIntervalSince(snapshot.refreshedAt) < -360
         return VStack(alignment: .leading, spacing: 6) {
             HStack(spacing: 7) {
                 LEDDot(color: Glass.load(peak), flashing: false, size: 11)
@@ -386,14 +390,16 @@ struct DesktopWidgetView: View {
                 if let p = u.plan, !p.isEmpty {
                     Text("· \(p)").font(.system(size: 11)).foregroundStyle(Glass.textTertiary)
                 }
-                // Flag a clearly stale reading (provider idle for a while).
-                if u.snapshotAt.timeIntervalSince(snapshot.refreshedAt) < -1800 {
-                    Text("截至 \(timeAgo(u.snapshotAt))")
-                        .font(.system(size: 10)).foregroundStyle(Glass.textTertiary)
+                if stale {
+                    Text("· \(timeAgo(u.snapshotAt))快照")
+                        .font(.system(size: 10)).foregroundStyle(Glass.amber.opacity(0.75))
                 }
             }
-            if let w = u.short { usageRow(usageLabel(w), w) }
-            if let w = u.long { usageRow(usageLabel(w), w) }
+            VStack(alignment: .leading, spacing: 6) {
+                if let w = u.short { usageRow(usageLabel(w), w) }
+                if let w = u.long { usageRow(usageLabel(w), w) }
+            }
+            .opacity(stale ? 0.55 : 1)   // dim a stale snapshot
         }
     }
 

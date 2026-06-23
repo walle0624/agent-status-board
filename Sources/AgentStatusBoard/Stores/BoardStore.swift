@@ -76,7 +76,10 @@ final class BoardStore: ObservableObject {
             let collector = usageCollector
             Task.detached(priority: .utility) { [weak self] in
                 let usage = collector.codexUsage()
-                await MainActor.run { self?.codexUsage = usage }
+                // Keep the last good snapshot if a read momentarily finds none
+                // (e.g. a brand-new Codex session with no token_count yet), so
+                // the usage doesn't blink out.
+                await MainActor.run { if let usage { self?.codexUsage = usage } }
             }
         }
         // CC usage costs a tiny inference ping, so poll it much less often and
