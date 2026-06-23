@@ -111,4 +111,59 @@ struct UsageCollector: Sendable {
         f2.formatOptions = [.withInternetDateTime]
         return f2.date(from: s)
     }
+
+    // MARK: Claude Code (live, via unified rate-limit response headers)
+
+    /// Claude Code keeps no local usage cache, and its /api/oauth/usage needs a
+    /// broader scope than a setup-token grants. But the 5-hour and weekly
+    /// utilization come back as `anthropic-ratelimit-unified-*` headers on any
+    /// inference call — which an inference-scoped token CAN make. So we send a
+    /// max_tokens:1 ping to /v1/messages (negligible cost) and read the headers.
+    /// Token: ~/.agent-status-board/cc-token.json (from `claude setup-token`).
+    func claudeUsage() async -> ProviderUsage? {
+        guard let token = claudeToken() else { return nil }
+        var req = URLRequest(url: URL(string: "https://api.anthropic.com/v1/messages")!)
+        req.httpMethod = "POST"
+        req.timeoutInterval = 20
+        req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        req.setValue("oauth-2025-04-20", forHTTPHeaderField: "anthropic-beta")
+        req.setValue("2023-06-01", forHTTPHeaderField: "anthropic-version")
+        req.setValue("application/json", forHTTPHeaderField: "content-type")
+        req.httpBody = Data(#"{"model":"claude-haiku-4-5-20251001","max_tokens":1,"messages":[{"role":"user","content":"."}]}"#.utf8)
+
+        guard let (_, resp) = try? await URLSession.shared.data(for: req),
+              let http = resp as? HTTPURLResponse else { return nil }
+
+        func window(_ tag: String, _ minutes: Int) -> UsageWindow? {
+            guard let util = http.value(forHTTPHeaderField: "anthropic-ratelimit-unified-\(tag)-utilization").flatMap(Double.init),
+                  let reset = http.value(forHTTPHeaderField: "anthropic-ratelimit-unified-\(tag)-reset").flatMap(Double.init)
+            else { return nil }
+            return UsageWindow(usedPercent: util * 100, windowMinutes: minutes,
+                               resetsAt: Date(timeIntervalSince1970: reset))
+        }
+
+        let short = window("5h", 300)
+        let long = window("7d", 10080)
+        guard short != nil || long != nil else { return nil }   // 401/403/no headers
+        return ProviderUsage(source: .claudeCode, plan: claudePlan(),
+                             short: short, long: long, snapshotAt: Date())
+    }
+
+    private func claudeToken() -> String? {
+        let url = FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent(".agent-status-board/cc-token.json")
+        guard let data = try? Data(contentsOf: url),
+              let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return nil }
+        let t = (obj["token"] as? String) ?? (obj["access_token"] as? String)
+        return (t?.isEmpty == false) ? t : nil
+    }
+
+    /// Best-effort plan label from Claude Code's own config (e.g. "claude_max").
+    private func claudePlan() -> String? {
+        let url = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".claude.json")
+        guard let data = try? Data(contentsOf: url),
+              let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let oa = obj["oauthAccount"] as? [String: Any] else { return nil }
+        return oa["organizationType"] as? String
+    }
 }

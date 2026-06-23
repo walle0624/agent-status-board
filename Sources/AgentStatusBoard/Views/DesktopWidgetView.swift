@@ -66,8 +66,8 @@ struct DesktopWidgetView: View {
             if attention.isEmpty && running.isEmpty && doneCount == 0 {
                 calmState                              // truly idle
             }
-            if store.codexUsage != nil {
-                usageBlock                             // Codex 5 小时 / 周 用量
+            if store.codexUsage != nil || store.claudeUsage != nil {
+                usageBlock                             // CC + Codex 5 小时 / 周 用量
             }
         }
         .padding(18)
@@ -328,24 +328,34 @@ struct DesktopWidgetView: View {
     // MARK: usage (Codex 5h / weekly)
 
     private var usageBlock: some View {
-        VStack(alignment: .leading, spacing: 6) {
+        VStack(alignment: .leading, spacing: 8) {
             Divider().overlay(Glass.hairline)
+            Text("用量").font(.system(size: 11)).foregroundStyle(Glass.textTertiary)
+            if let u = store.claudeUsage {
+                usageProvider("CC", u)
+            } else {
+                Text("CC · 用量获取中…（首次约几秒；长期为空则检查 cc-token.json）")
+                    .font(.system(size: 10)).foregroundStyle(Glass.textTertiary)
+            }
+            if let u = store.codexUsage {
+                usageProvider("Codex", u)
+            }
+        }
+    }
+
+    private func usageProvider(_ name: String, _ u: ProviderUsage) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
             HStack(spacing: 6) {
-                Text("用量").font(.system(size: 11)).foregroundStyle(Glass.textTertiary)
-                if let u = store.codexUsage {
-                    Text(u.plan.map { "Codex · \($0)" } ?? "Codex")
-                        .font(.system(size: 11)).foregroundStyle(Glass.textTertiary)
-                    // Flag a clearly stale reading (no Codex activity for a while).
-                    if u.snapshotAt.timeIntervalSince(snapshot.refreshedAt) < -1800 {
-                        Text("· 截至 \(timeAgo(u.snapshotAt))")
-                            .font(.system(size: 10)).foregroundStyle(Glass.textTertiary)
-                    }
+                Text(u.plan.map { "\(name) · \($0)" } ?? name)
+                    .font(.system(size: 11)).foregroundStyle(Glass.textSecondary)
+                // Flag a clearly stale reading (provider idle for a while).
+                if u.snapshotAt.timeIntervalSince(snapshot.refreshedAt) < -1800 {
+                    Text("截至 \(timeAgo(u.snapshotAt))")
+                        .font(.system(size: 10)).foregroundStyle(Glass.textTertiary)
                 }
             }
-            if let w = store.codexUsage?.short { usageRow(usageLabel(w), w) }
-            if let w = store.codexUsage?.long { usageRow(usageLabel(w), w) }
-            Text("CC · 用量需登录态实时查询，暂未接入")
-                .font(.system(size: 10)).foregroundStyle(Glass.textTertiary)
+            if let w = u.short { usageRow(usageLabel(w), w) }
+            if let w = u.long { usageRow(usageLabel(w), w) }
         }
     }
 

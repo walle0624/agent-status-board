@@ -10,13 +10,15 @@ final class BoardStore: ObservableObject {
     @Published private(set) var snapshot = AgentSnapshot(tasks: [], refreshedAt: Date())
     @Published private(set) var isRefreshing = false
     @Published private(set) var activity: [ActivityEntry] = []
-    /// Codex 5-hour / weekly usage, refreshed on a slower cadence than sessions.
+    /// Codex / Claude Code 5-hour + weekly usage, refreshed slower than sessions.
     @Published private(set) var codexUsage: ProviderUsage?
+    @Published private(set) var claudeUsage: ProviderUsage?
 
     private let collectors: [any TaskCollecting]
     private let activityLog = ActivityLog()
     private let usageCollector = UsageCollector()
     private var lastUsageAt: Date = .distantPast
+    private var lastClaudeUsageAt: Date = .distantPast
     private var timer: Timer?
 
     init(collectors: [any TaskCollecting] = [
@@ -69,12 +71,23 @@ final class BoardStore: ObservableObject {
     /// Usage changes slowly; reparse the latest rollout at most every ~25s, off
     /// the main thread, and publish the result without blocking the session loop.
     private func refreshUsageIfDue(now: Date) {
-        guard now.timeIntervalSince(lastUsageAt) > 25 else { return }
-        lastUsageAt = now
-        let collector = usageCollector
-        Task.detached(priority: .utility) { [weak self] in
-            let usage = collector.codexUsage()
-            await MainActor.run { self?.codexUsage = usage }
+        if now.timeIntervalSince(lastUsageAt) > 25 {
+            lastUsageAt = now
+            let collector = usageCollector
+            Task.detached(priority: .utility) { [weak self] in
+                let usage = collector.codexUsage()
+                await MainActor.run { self?.codexUsage = usage }
+            }
+        }
+        // CC usage costs a tiny inference ping, so poll it much less often and
+        // keep the last good value across transient failures.
+        if now.timeIntervalSince(lastClaudeUsageAt) > 300 {
+            lastClaudeUsageAt = now
+            let collector = usageCollector
+            Task.detached(priority: .utility) { [weak self] in
+                let usage = await collector.claudeUsage()
+                await MainActor.run { if let usage { self?.claudeUsage = usage } }
+            }
         }
     }
 

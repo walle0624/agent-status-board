@@ -13,7 +13,7 @@ NAMES="$HOME/.agent-status-board/names.json"
 [ -f "$NAMES" ] || printf '{\n  "/Users/example/path/to/project": "My Session Name"\n}\n' > "$NAMES"
 
 # 1) install scripts to a stable location
-for s in record.sh cc-hook.sh codex-hook.sh codex-notify.sh classify.py configure-llm.sh; do
+for s in record.sh cc-hook.sh codex-hook.sh codex-notify.sh classify.py configure-llm.sh cc-token-setup.sh; do
   cp "$SRC_DIR/$s" "$BIN_DIR/$s"
   chmod +x "$BIN_DIR/$s"
 done
@@ -104,3 +104,4 @@ echo "done."
 echo "  • Claude Code: start a new session to begin emitting events."
 echo "  • Codex: restart it, then run /hooks inside Codex once to TRUST the hooks."
 echo "  • AI 分类器：重跑 $BIN_DIR/configure-llm.sh 可改 provider / key / model。"
+echo "  • CC 用量面板：跑 $BIN_DIR/cc-token-setup.sh 生成长期 token（Codex 用量开箱即用）。"
