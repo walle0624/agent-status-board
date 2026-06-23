@@ -25,6 +25,13 @@ enum Glass {
     static let textSecondary = Color.white.opacity(0.52)
     static let textTertiary = Color.white.opacity(0.34)
     static let hairline = Color.white.opacity(0.10)
+
+    /// Traffic-light color for a usage load: green (充足) / amber (偏高) / red (耗尽).
+    static func load(_ pct: Double) -> Color {
+        if pct >= 80 { return red }
+        if pct >= 50 { return amber }
+        return green
+    }
 }
 
 struct DesktopWidgetView: View {
@@ -33,6 +40,7 @@ struct DesktopWidgetView: View {
     var onTogglePin: () -> Void = {}
     var onOpen: (AgentTask) -> Void = { _ in }
     var isPinned: Bool = true
+    @State private var appeared = false
 
     private var snapshot: AgentSnapshot { store.snapshot }
     private var attention: [AgentTask] {
@@ -75,11 +83,20 @@ struct DesktopWidgetView: View {
         .background(
             ZStack {
                 VisualEffectView(material: .hudWindow)
-                // Glassy depth: a richer dark base for the "liquid glass" look.
+                // Deep navy base for the glassy look.
                 LinearGradient(
-                    colors: [Color(.sRGB, red: 0.10, green: 0.11, blue: 0.13).opacity(0.50),
-                             Color(.sRGB, red: 0.06, green: 0.07, blue: 0.09).opacity(0.66)],
+                    colors: [Color(.sRGB, red: 0.09, green: 0.11, blue: 0.17).opacity(0.74),
+                             Color(.sRGB, red: 0.05, green: 0.06, blue: 0.11).opacity(0.84)],
                     startPoint: .top, endPoint: .bottom
+                )
+                // Ambient corner glows give the card depth.
+                RadialGradient(
+                    colors: [Color(.sRGB, red: 0.30, green: 0.52, blue: 0.95).opacity(0.12), .clear],
+                    center: .topLeading, startRadius: 0, endRadius: 300
+                )
+                RadialGradient(
+                    colors: [Color(.sRGB, red: 0.52, green: 0.32, blue: 0.85).opacity(0.12), .clear],
+                    center: .bottomTrailing, startRadius: 0, endRadius: 320
                 )
             }
         )
@@ -98,6 +115,9 @@ struct DesktopWidgetView: View {
         // below, or the window edge clips it into a hard rectangular line.
         .shadow(color: .black.opacity(0.28), radius: 8, y: 4)
         .padding(22)
+        .opacity(appeared ? 1 : 0)
+        .scaleEffect(appeared ? 1 : 0.97)
+        .onAppear { withAnimation(.spring(response: 0.42, dampingFraction: 0.82)) { appeared = true } }
     }
 
     // MARK: header
@@ -123,15 +143,16 @@ struct DesktopWidgetView: View {
 
             Button { Task { await store.refresh() } } label: {
                 Image(systemName: "arrow.clockwise")
-                    .font(.system(size: 11))
-                    .foregroundStyle(Glass.textTertiary)
+                    .font(.system(size: 11, weight: .medium))
+                    .foregroundStyle(Glass.textSecondary)
+                    .frame(width: 22, height: 22)
+                    .background(Circle().fill(Color.white.opacity(0.06)))
             }
             .buttonStyle(.plain)
             .help("刷新")
 
             Button(action: onClose) {
-                Circle().fill(Color(.sRGB, red: 1, green: 0.37, blue: 0.34))
-                    .frame(width: 12, height: 12)
+                LEDDot(color: Glass.red, flashing: false, size: 12)
             }
             .buttonStyle(.plain)
             .help("隐藏（可从菜单栏重新打开）")
@@ -328,9 +349,15 @@ struct DesktopWidgetView: View {
     // MARK: usage (Codex 5h / weekly)
 
     private var usageBlock: some View {
-        VStack(alignment: .leading, spacing: 8) {
+        VStack(alignment: .leading, spacing: 10) {
             Divider().overlay(Glass.hairline)
-            Text("用量").font(.system(size: 11)).foregroundStyle(Glass.textTertiary)
+            HStack(spacing: 6) {
+                Text("用量").font(.system(size: 11)).foregroundStyle(Glass.textTertiary)
+                Spacer()
+                legendItem(Glass.green, "充足")
+                legendItem(Glass.amber, "偏高")
+                legendItem(Glass.red, "耗尽")
+            }
             if let u = store.claudeUsage {
                 usageProvider("CC", u)
             } else {
@@ -343,11 +370,22 @@ struct DesktopWidgetView: View {
         }
     }
 
+    private func legendItem(_ color: Color, _ label: String) -> some View {
+        HStack(spacing: 4) {
+            LEDDot(color: color, flashing: false, size: 6)
+            Text(label).font(.system(size: 10)).foregroundStyle(Glass.textTertiary)
+        }
+    }
+
     private func usageProvider(_ name: String, _ u: ProviderUsage) -> some View {
-        VStack(alignment: .leading, spacing: 4) {
-            HStack(spacing: 6) {
-                Text(u.plan.map { "\(name) · \($0)" } ?? name)
-                    .font(.system(size: 11)).foregroundStyle(Glass.textSecondary)
+        let peak = max(u.short?.usedPercent ?? 0, u.long?.usedPercent ?? 0)
+        return VStack(alignment: .leading, spacing: 6) {
+            HStack(spacing: 7) {
+                LEDDot(color: Glass.load(peak), flashing: false, size: 11)
+                Text(name).font(.system(size: 13, weight: .semibold)).foregroundStyle(Glass.textPrimary)
+                if let p = u.plan, !p.isEmpty {
+                    Text("· \(p)").font(.system(size: 11)).foregroundStyle(Glass.textTertiary)
+                }
                 // Flag a clearly stale reading (provider idle for a while).
                 if u.snapshotAt.timeIntervalSince(snapshot.refreshedAt) < -1800 {
                     Text("截至 \(timeAgo(u.snapshotAt))")
@@ -369,16 +407,16 @@ struct DesktopWidgetView: View {
     }
 
     private func usageRow(_ label: String, _ w: UsageWindow) -> some View {
-        HStack(spacing: 8) {
+        HStack(spacing: 10) {
             Text(label).font(.system(size: 11)).foregroundStyle(Glass.textSecondary)
-                .frame(width: 38, alignment: .leading)
-            UsageBar(percent: w.usedPercent).frame(width: 84)
+                .frame(width: 40, alignment: .leading)
+            UsageBar(percent: w.usedPercent).frame(maxWidth: .infinity)
             Text("\(Int(w.usedPercent.rounded()))%")
-                .font(.system(size: 11).monospacedDigit()).foregroundStyle(Glass.textSecondary)
-                .frame(width: 34, alignment: .trailing)
+                .font(.system(size: 12, weight: .semibold).monospacedDigit())
+                .foregroundStyle(Glass.textPrimary)
+                .frame(width: 38, alignment: .trailing)
             Text(resetText(w.resetsAt))
                 .font(.system(size: 10)).foregroundStyle(Glass.textTertiary).fixedSize()
-            Spacer(minLength: 0)
         }
     }
 
@@ -405,9 +443,14 @@ private struct ClickableRow<Content: View>: View {
             .padding(.vertical, 5)
             .frame(maxWidth: .infinity, alignment: .leading)
             .background(
-                RoundedRectangle(cornerRadius: 9, style: .continuous)
-                    .fill(Color.white.opacity(hover ? 0.07 : 0))
+                RoundedRectangle(cornerRadius: 10, style: .continuous)
+                    .fill(Color.white.opacity(hover ? 0.08 : 0))
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 10, style: .continuous)
+                            .strokeBorder(Color.white.opacity(hover ? 0.07 : 0), lineWidth: 0.5)
+                    )
                     .padding(.horizontal, -8)   // bleed the highlight outward only
+                    .animation(.easeOut(duration: 0.16), value: hover)
             )
             .contentShape(Rectangle())
             .onTapGesture(perform: onTap)
@@ -418,26 +461,37 @@ private struct ClickableRow<Content: View>: View {
     }
 }
 
-/// A thin usage meter: faint track + a fill whose color escalates with load.
+/// A glossy usage meter: rounded track + a gradient fill (with a top sheen and
+/// soft colored glow) whose color escalates with load. The fill animates when
+/// the value changes.
 private struct UsageBar: View {
     let percent: Double
     var body: some View {
         GeometryReader { geo in
+            let w = max(7, geo.size.width * min(1, max(0, percent) / 100))
             ZStack(alignment: .leading) {
-                Capsule().fill(Color.white.opacity(0.10))
-                Capsule().fill(color)
-                    .frame(width: max(3, geo.size.width * min(1, max(0, percent) / 100)))
+                Capsule().fill(Color.white.opacity(0.08))
+                Capsule()
+                    .fill(LinearGradient(colors: [color.opacity(0.85), color],
+                                         startPoint: .top, endPoint: .bottom))
+                    .overlay(
+                        Capsule().fill(LinearGradient(
+                            colors: [Color.white.opacity(0.35), .clear],
+                            startPoint: .top, endPoint: .center))
+                    )
+                    .frame(width: w)
+                    .shadow(color: color.opacity(0.45), radius: 3, y: 0)
+                    .animation(.easeOut(duration: 0.55), value: percent)
             }
         }
-        .frame(height: 4)
+        .frame(height: 7)
     }
-    private var color: Color {
-        if percent >= 80 { return Glass.red }
-        if percent >= 50 { return Glass.amber }
-        return Glass.green
-    }
+    private var color: Color { Glass.load(percent) }
 }
 
+/// A glossy 3D sphere: a radial body (top-left highlight → color), a small
+/// specular dot, and a soft colored outer glow. When `flashing`, the glow
+/// breathes to draw the eye (used for the needs-attention state).
 private struct LEDDot: View {
     let color: Color
     var flashing: Bool
@@ -447,11 +501,32 @@ private struct LEDDot: View {
         if flashing {
             TimelineView(.animation) { ctx in
                 let t = ctx.date.timeIntervalSinceReferenceDate
-                let on = t.truncatingRemainder(dividingBy: 0.6) < 0.3
-                Circle().fill(color).frame(width: size, height: size).opacity(on ? 1 : 0.35)
+                let phase = (sin(t * 2 * .pi / 1.4) + 1) / 2   // 0…1, ~1.4s period
+                sphere(glow: 0.30 + 0.55 * phase)
             }
         } else {
-            Circle().fill(color).frame(width: size, height: size)
+            sphere(glow: 0.45)
         }
+    }
+
+    private func sphere(glow: Double) -> some View {
+        let gradient = RadialGradient(
+            colors: [Color.white.opacity(0.95), color, color.opacity(0.72)],
+            center: UnitPoint(x: 0.34, y: 0.28),
+            startRadius: 0, endRadius: size * 0.9
+        )
+        let highlightSize: CGFloat = size * 0.30
+        let highlight = Circle()
+            .fill(Color.white.opacity(0.85))
+            .frame(width: highlightSize, height: highlightSize)
+            .blur(radius: size * 0.05)
+            .offset(x: -size * 0.18, y: -size * 0.20)
+        let rim = Circle().strokeBorder(Color.black.opacity(0.12), lineWidth: 0.5)
+        return Circle()
+            .fill(gradient)
+            .overlay(highlight)
+            .overlay(rim)
+            .frame(width: size, height: size)
+            .shadow(color: color.opacity(glow), radius: size * 0.5)
     }
 }
