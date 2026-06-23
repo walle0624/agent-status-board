@@ -71,14 +71,14 @@ final class BoardStore: ObservableObject {
     /// Usage changes slowly; reparse the latest rollout at most every ~25s, off
     /// the main thread, and publish the result without blocking the session loop.
     private func refreshUsageIfDue(now: Date) {
-        if now.timeIntervalSince(lastUsageAt) > 25 {
+        if now.timeIntervalSince(lastUsageAt) > 60 {
             lastUsageAt = now
             let collector = usageCollector
             Task.detached(priority: .utility) { [weak self] in
-                let usage = collector.codexUsage()
-                // Keep the last good snapshot if a read momentarily finds none
-                // (e.g. a brand-new Codex session with no token_count yet), so
-                // the usage doesn't blink out.
+                // Prefer Codex's live usage endpoint; fall back to the local
+                // rollout snapshot if it fails (token expired / offline). Keep
+                // the last good value if both find nothing, so it doesn't blink.
+                let usage = await collector.codexUsageLive() ?? collector.codexUsage()
                 await MainActor.run { if let usage { self?.codexUsage = usage } }
             }
         }

@@ -166,4 +166,48 @@ struct UsageCollector: Sendable {
               let oa = obj["oauthAccount"] as? [String: Any] else { return nil }
         return oa["organizationType"] as? String
     }
+
+    // MARK: Codex (live, via the ChatGPT backend usage endpoint)
+
+    /// Codex's live usage — a free GET to the ChatGPT backend that its own CLI
+    /// uses (`/backend-api/wham/usage`), authed with the chatgpt-mode token in
+    /// ~/.codex/auth.json. Far more accurate than the rollout snapshot, which
+    /// only updates when Codex runs. Returns nil on any failure (caller then
+    /// falls back to the local snapshot).
+    func codexUsageLive() async -> ProviderUsage? {
+        guard let (token, account) = codexAuth() else { return nil }
+        var req = URLRequest(url: URL(string: "https://chatgpt.com/backend-api/wham/usage")!)
+        req.timeoutInterval = 15
+        req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        if !account.isEmpty { req.setValue(account, forHTTPHeaderField: "chatgpt-account-id") }
+        req.setValue("codex_cli_rs", forHTTPHeaderField: "User-Agent")
+
+        guard let (data, resp) = try? await URLSession.shared.data(for: req),
+              let http = resp as? HTTPURLResponse, http.statusCode == 200,
+              let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return nil }
+
+        let rl = obj["rate_limit"] as? [String: Any]
+        func window(_ key: String) -> UsageWindow? {
+            guard let w = rl?[key] as? [String: Any],
+                  let pct = (w["used_percent"] as? NSNumber)?.doubleValue,
+                  let secs = (w["limit_window_seconds"] as? NSNumber)?.intValue,
+                  let reset = (w["reset_at"] as? NSNumber)?.doubleValue else { return nil }
+            return UsageWindow(usedPercent: pct, windowMinutes: secs / 60,
+                               resetsAt: Date(timeIntervalSince1970: reset))
+        }
+        let short = window("primary_window")
+        let long = window("secondary_window")
+        guard short != nil || long != nil else { return nil }
+        return ProviderUsage(source: .codex, plan: obj["plan_type"] as? String,
+                             short: short, long: long, snapshotAt: Date())
+    }
+
+    private func codexAuth() -> (token: String, account: String)? {
+        let url = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".codex/auth.json")
+        guard let data = try? Data(contentsOf: url),
+              let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let tokens = obj["tokens"] as? [String: Any],
+              let token = tokens["access_token"] as? String, !token.isEmpty else { return nil }
+        return (token, (tokens["account_id"] as? String) ?? "")
+    }
 }
