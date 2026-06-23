@@ -1,6 +1,6 @@
 {
-  "owner": "",
+  "owner": "walle0624",
   "repo": "agent-status-board",
   "branch": "main",
-  "_comment": "在线自更新的源。把 owner 填成你的 GitHub 用户名、repo 填成你的仓库名（仓库需公开，这样免 token 直接下载源码包）。App 会定时查这个仓库的 VERSION，有新版就下载它的源码 zip、本地重新编译并重装——收到 zip 的人不需要 git，只要有 Swift 工具链即可。填好后重跑 install.sh 生效。"
+  "_comment": "在线自更新的源。App 会定时查这个仓库的 VERSION，有新版就下载它的源码 zip、本地重新编译并重装——收到 zip 的人不需要 git，只要有 Swift 工具链即可。要换仓库就改 owner/repo/branch，再重跑 install.sh。"
 }
