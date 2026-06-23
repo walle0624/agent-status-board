@@ -66,6 +66,9 @@ struct DesktopWidgetView: View {
             if attention.isEmpty && running.isEmpty && doneCount == 0 {
                 calmState                              // truly idle
             }
+            if store.codexUsage != nil {
+                usageBlock                             // Codex 5 小时 / 周 用量
+            }
         }
         .padding(18)
         .frame(width: 312, alignment: .leading)
@@ -321,6 +324,62 @@ struct DesktopWidgetView: View {
         if mins < 60 { return "\(mins) 分钟前" }
         return "\(mins / 60) 小时前"
     }
+
+    // MARK: usage (Codex 5h / weekly)
+
+    private var usageBlock: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Divider().overlay(Glass.hairline)
+            HStack(spacing: 6) {
+                Text("用量").font(.system(size: 11)).foregroundStyle(Glass.textTertiary)
+                if let u = store.codexUsage {
+                    Text(u.plan.map { "Codex · \($0)" } ?? "Codex")
+                        .font(.system(size: 11)).foregroundStyle(Glass.textTertiary)
+                    // Flag a clearly stale reading (no Codex activity for a while).
+                    if u.snapshotAt.timeIntervalSince(snapshot.refreshedAt) < -1800 {
+                        Text("· 截至 \(timeAgo(u.snapshotAt))")
+                            .font(.system(size: 10)).foregroundStyle(Glass.textTertiary)
+                    }
+                }
+            }
+            if let w = store.codexUsage?.short { usageRow(usageLabel(w), w) }
+            if let w = store.codexUsage?.long { usageRow(usageLabel(w), w) }
+            Text("CC · 用量需登录态实时查询，暂未接入")
+                .font(.system(size: 10)).foregroundStyle(Glass.textTertiary)
+        }
+    }
+
+    private func usageLabel(_ w: UsageWindow) -> String {
+        switch w.windowMinutes {
+        case ..<360: return "5 小时"
+        case 360..<2880: return "\(w.windowMinutes / 60) 小时"
+        case 10080: return "本周"
+        default: return "\(w.windowMinutes / 1440) 天"
+        }
+    }
+
+    private func usageRow(_ label: String, _ w: UsageWindow) -> some View {
+        HStack(spacing: 8) {
+            Text(label).font(.system(size: 11)).foregroundStyle(Glass.textSecondary)
+                .frame(width: 38, alignment: .leading)
+            UsageBar(percent: w.usedPercent).frame(width: 84)
+            Text("\(Int(w.usedPercent.rounded()))%")
+                .font(.system(size: 11).monospacedDigit()).foregroundStyle(Glass.textSecondary)
+                .frame(width: 34, alignment: .trailing)
+            Text(resetText(w.resetsAt))
+                .font(.system(size: 10)).foregroundStyle(Glass.textTertiary).fixedSize()
+            Spacer(minLength: 0)
+        }
+    }
+
+    /// Compact countdown to the window reset, anchored to the snapshot.
+    private func resetText(_ date: Date) -> String {
+        let secs = Int(date.timeIntervalSince(snapshot.refreshedAt))
+        if secs <= 0 { return "重置中" }
+        if secs < 3600 { return "\(secs / 60)m 后重置" }
+        if secs < 86400 { return "\(secs / 3600)h 后重置" }
+        return "\(secs / 86400)d 后重置"
+    }
 }
 
 /// A full-width row that opens the owning session on click, with a subtle hover
@@ -346,6 +405,26 @@ private struct ClickableRow<Content: View>: View {
                 hover = h
                 if h { NSCursor.pointingHand.push() } else { NSCursor.pop() }
             }
+    }
+}
+
+/// A thin usage meter: faint track + a fill whose color escalates with load.
+private struct UsageBar: View {
+    let percent: Double
+    var body: some View {
+        GeometryReader { geo in
+            ZStack(alignment: .leading) {
+                Capsule().fill(Color.white.opacity(0.10))
+                Capsule().fill(color)
+                    .frame(width: max(3, geo.size.width * min(1, max(0, percent) / 100)))
+            }
+        }
+        .frame(height: 4)
+    }
+    private var color: Color {
+        if percent >= 80 { return Glass.red }
+        if percent >= 50 { return Glass.amber }
+        return Glass.green
     }
 }
 

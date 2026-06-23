@@ -10,9 +10,13 @@ final class BoardStore: ObservableObject {
     @Published private(set) var snapshot = AgentSnapshot(tasks: [], refreshedAt: Date())
     @Published private(set) var isRefreshing = false
     @Published private(set) var activity: [ActivityEntry] = []
+    /// Codex 5-hour / weekly usage, refreshed on a slower cadence than sessions.
+    @Published private(set) var codexUsage: ProviderUsage?
 
     private let collectors: [any TaskCollecting]
     private let activityLog = ActivityLog()
+    private let usageCollector = UsageCollector()
+    private var lastUsageAt: Date = .distantPast
     private var timer: Timer?
 
     init(collectors: [any TaskCollecting] = [
@@ -59,6 +63,19 @@ final class BoardStore: ObservableObject {
         snapshot = AgentSnapshot(tasks: deduplicate(collected), refreshedAt: now)
         activity = activityLog.recent(limit: 30)
         isRefreshing = false
+        refreshUsageIfDue(now: now)
+    }
+
+    /// Usage changes slowly; reparse the latest rollout at most every ~25s, off
+    /// the main thread, and publish the result without blocking the session loop.
+    private func refreshUsageIfDue(now: Date) {
+        guard now.timeIntervalSince(lastUsageAt) > 25 else { return }
+        lastUsageAt = now
+        let collector = usageCollector
+        Task.detached(priority: .utility) { [weak self] in
+            let usage = collector.codexUsage()
+            await MainActor.run { self?.codexUsage = usage }
+        }
     }
 
     private func deduplicate(_ tasks: [AgentTask]) -> [AgentTask] {

@@ -12,6 +12,13 @@ final class FloatingWidgetController: NSObject, NSWindowDelegate {
     /// on top of everything.
     private var pinned = false
 
+    /// Top-left anchor: the widget grows/shrinks downward from this fixed point
+    /// instead of from AppKit's default bottom-left, so the top edge stays put
+    /// as sessions are added or removed.
+    private let topLeftKey = "widgetTopLeft"
+    private var anchorTopLeft: NSPoint?
+    private var isRepositioning = false
+
     init(store: BoardStore) {
         self.store = store
         super.init()
@@ -65,11 +72,7 @@ final class FloatingWidgetController: NSObject, NSWindowDelegate {
         window.setContentSize(hosting.fittingSize)
         window.delegate = self
 
-        if let saved = savedOrigin() {
-            window.setFrameOrigin(saved)
-        } else {
-            positionTopRight(window)
-        }
+        positionAnchored(window)
         window.orderFront(nil)
         self.window = window
     }
@@ -77,9 +80,47 @@ final class FloatingWidgetController: NSObject, NSWindowDelegate {
     // MARK: - position persistence
 
     func windowDidMove(_ notification: Notification) {
-        guard let window else { return }
-        let o = window.frame.origin
-        UserDefaults.standard.set([Double(o.x), Double(o.y)], forKey: originKey)
+        guard let window, !isRepositioning else { return }
+        let f = window.frame
+        let tl = NSPoint(x: f.minX, y: f.maxY)
+        anchorTopLeft = tl
+        UserDefaults.standard.set([Double(tl.x), Double(tl.y)], forKey: topLeftKey)
+    }
+
+    /// Keep the top edge fixed when the content (and thus the window) resizes.
+    func windowDidResize(_ notification: Notification) {
+        guard let window, let tl = anchorTopLeft, !isRepositioning else { return }
+        let target = NSPoint(x: tl.x, y: tl.y - window.frame.height)
+        if abs(window.frame.origin.x - target.x) > 0.5 || abs(window.frame.origin.y - target.y) > 0.5 {
+            isRepositioning = true
+            window.setFrameOrigin(target)
+            isRepositioning = false
+        }
+    }
+
+    /// Place the window so its top-left sits at the saved anchor (migrating an
+    /// old bottom-left origin if present), then remember that anchor.
+    private func positionAnchored(_ window: NSWindow) {
+        let h = window.frame.height
+        if let tl = savedTopLeft() {
+            window.setFrameOrigin(NSPoint(x: tl.x, y: tl.y - h))
+            anchorTopLeft = tl
+        } else if let old = savedOrigin() {
+            window.setFrameOrigin(old)
+            let tl = NSPoint(x: old.x, y: old.y + h)
+            anchorTopLeft = tl
+            UserDefaults.standard.set([Double(tl.x), Double(tl.y)], forKey: topLeftKey)
+        } else {
+            positionTopRight(window)
+            let f = window.frame
+            anchorTopLeft = NSPoint(x: f.minX, y: f.maxY)
+        }
+    }
+
+    private func savedTopLeft() -> NSPoint? {
+        guard let xy = UserDefaults.standard.array(forKey: topLeftKey) as? [Double],
+              xy.count == 2 else { return nil }
+        return NSPoint(x: xy[0], y: xy[1])
     }
 
     private func savedOrigin() -> NSPoint? {
