@@ -47,9 +47,12 @@ struct UpdateChecker: Sendable {
         guard let cfg = config(), let checkout = cfg["checkout"] as? String else { return }
         let script = "\(checkout)/script/update.sh"
         guard FileManager.default.fileExists(atPath: script) else { return }
+        // Run a temp copy of the updater (passing the checkout dir) so it isn't
+        // clobbered when it refreshes the source tree mid-update.
+        let cmd = "cp \(quote(script)) /tmp/asb-update.sh && nohup bash /tmp/asb-update.sh \(quote(checkout)) > /tmp/asb-update.log 2>&1 &"
         let p = Process()
         p.executableURL = URL(fileURLWithPath: "/bin/bash")
-        p.arguments = ["-c", "nohup bash \(quote(script)) > /tmp/asb-update.log 2>&1 &"]
+        p.arguments = ["-c", cmd]
         try? p.run()
     }
 
