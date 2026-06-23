@@ -102,6 +102,7 @@ fi
 
 echo "done."
 echo "  • Claude Code: start a new session to begin emitting events."
-echo "  • Codex: restart it, then run /hooks inside Codex once to TRUST the hooks."
+echo "  • Codex: 在「设置 → 编码 → 钩子 → 用户配置（7 个钩子）」里信任/启用这些 hooks"
+echo "          （Codex 没有 /hooks 命令；不信任则状态不更新）。"
 echo "  • AI 分类器：重跑 $BIN_DIR/configure-llm.sh 可改 provider / key / model。"
 echo "  • CC 用量面板：跑 $BIN_DIR/cc-token-setup.sh 生成长期 token（Codex 用量开箱即用）。"

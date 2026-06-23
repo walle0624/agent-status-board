@@ -42,6 +42,8 @@ cat >"$INFO_PLIST" <<PLIST
   <string>$APP_NAME</string>
   <key>CFBundlePackageType</key>
   <string>APPL</string>
+  <key>CFBundleIconFile</key>
+  <string>AppIcon</string>
   <key>CFBundleShortVersionString</key>
   <string>$APP_VERSION</string>
   <key>CFBundleVersion</key>
@@ -55,6 +57,13 @@ cat >"$INFO_PLIST" <<PLIST
 </dict>
 </plist>
 PLIST
+
+# Bundle the app icon (generated via Bailian text-to-image; source in Resources/).
+ICON_SRC="$ROOT_DIR/Resources/AppIcon.icns"
+if [ -f "$ICON_SRC" ]; then
+  mkdir -p "$APP_CONTENTS/Resources"
+  cp "$ICON_SRC" "$APP_CONTENTS/Resources/AppIcon.icns"
+fi
 
 open_app() {
   /usr/bin/open -n "$APP_BUNDLE"
