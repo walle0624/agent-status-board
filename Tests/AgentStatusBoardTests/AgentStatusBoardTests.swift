@@ -46,3 +46,11 @@ private func task(_ id: String, _ source: AgentSource, _ status: AgentTaskStatus
     #expect(s.overallStatus(for: .codex) == .running)
     #expect(s.overallStatus(for: .claudeCode) == .needsAttention)
 }
+
+@Test func updateVersionCompare() {
+    #expect(UpdateChecker.isNewer("1.12", than: "1.11"))
+    #expect(UpdateChecker.isNewer("1.11", than: "1.2"))   // numeric, not lexical
+    #expect(UpdateChecker.isNewer("2.0", than: "1.99"))
+    #expect(!UpdateChecker.isNewer("1.11", than: "1.11"))
+    #expect(!UpdateChecker.isNewer("1.10", than: "1.11"))
+}

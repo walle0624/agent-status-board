@@ -17,13 +17,21 @@ final class BoardStore: ObservableObject {
     /// no usage row at all.
     @Published private(set) var codexAvailable = false
     @Published private(set) var claudeAvailable = false
+    /// Newer version available from the source GitHub repo, if any (drives the
+    /// in-app "click to update" banner).
+    @Published private(set) var availableUpdate: String?
 
     private let collectors: [any TaskCollecting]
     private let activityLog = ActivityLog()
     private let usageCollector = UsageCollector()
+    private let updateChecker = UpdateChecker()
     private var lastUsageAt: Date = .distantPast
     private var lastClaudeUsageAt: Date = .distantPast
+    private var lastUpdateCheck: Date = .distantPast
     private var timer: Timer?
+
+    /// Run the local source-update (git pull + rebuild + reinstall + relaunch).
+    func applyUpdate() { updateChecker.runUpdate() }
 
     init(collectors: [any TaskCollecting] = [
         SessionEventCollector()
@@ -110,6 +118,15 @@ final class BoardStore: ObservableObject {
             Task.detached(priority: .utility) { [weak self] in
                 let usage = await collector.claudeUsage()
                 await MainActor.run { if let usage { self?.claudeUsage = usage } }
+            }
+        }
+        // Check the source repo for a newer version hourly.
+        if now.timeIntervalSince(lastUpdateCheck) > 3600 {
+            lastUpdateCheck = now
+            let checker = updateChecker
+            Task.detached(priority: .utility) { [weak self] in
+                let latest = await checker.latestIfNewer()
+                await MainActor.run { self?.availableUpdate = latest }
             }
         }
     }

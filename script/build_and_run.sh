@@ -5,9 +5,10 @@ MODE="${1:-run}"
 APP_NAME="AgentStatusBoard"
 BUNDLE_ID="ai.linkingdigital.AgentStatusBoard"
 MIN_SYSTEM_VERSION="14.0"
-APP_VERSION="${APP_VERSION:-1.0}"
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+# Single source of truth for the version: the VERSION file (overridable via env).
+APP_VERSION="${APP_VERSION:-$(cat "$ROOT_DIR/VERSION" 2>/dev/null || echo 1.0)}"
 DIST_DIR="$ROOT_DIR/dist"
 APP_BUNDLE="$DIST_DIR/$APP_NAME.app"
 APP_CONTENTS="$APP_BUNDLE/Contents"

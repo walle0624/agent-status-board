@@ -41,6 +41,7 @@ struct DesktopWidgetView: View {
     var onOpen: (AgentTask) -> Void = { _ in }
     var isPinned: Bool = true
     @State private var appeared = false
+    @State private var updating = false
 
     private var snapshot: AgentSnapshot { store.snapshot }
     private var attention: [AgentTask] {
@@ -62,6 +63,9 @@ struct DesktopWidgetView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             header
+            if let v = store.availableUpdate {
+                updateBanner(v)
+            }
             if !attention.isEmpty {
                 attentionBlock                         // red hero: needs you
                 if !running.isEmpty { runningListBlock }   // keep running as a list
@@ -176,6 +180,38 @@ struct DesktopWidgetView: View {
         case .thinking: (Glass.amber, "思考中")
         case .done: (Glass.green, "已完成")
         case .idle: (Glass.green, "空闲")
+        }
+    }
+
+    // MARK: update banner
+
+    @ViewBuilder
+    private func updateBanner(_ version: String) -> some View {
+        let accent = Color(.sRGB, red: 0.40, green: 0.66, blue: 1.0)
+        Button {
+            if !updating { updating = true; store.applyUpdate() }
+        } label: {
+            HStack(spacing: 7) {
+                Image(systemName: updating ? "arrow.triangle.2.circlepath" : "arrow.down.circle.fill")
+                    .font(.system(size: 11))
+                Text(updating ? "更新中…（完成后自动重启）" : "有新版本 v\(version) · 点击更新")
+                    .font(.system(size: 11, weight: .medium))
+                Spacer(minLength: 4)
+                if !updating {
+                    Image(systemName: "chevron.right").font(.system(size: 9, weight: .semibold))
+                }
+            }
+            .foregroundStyle(accent)
+            .padding(.horizontal, 10).padding(.vertical, 7)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(RoundedRectangle(cornerRadius: 10, style: .continuous).fill(accent.opacity(0.14)))
+            .overlay(RoundedRectangle(cornerRadius: 10, style: .continuous)
+                .strokeBorder(accent.opacity(0.25), lineWidth: 0.6))
+        }
+        .buttonStyle(.plain)
+        .disabled(updating)
+        .onHover { h in
+            if h && !updating { NSCursor.pointingHand.push() } else if !h { NSCursor.pop() }
         }
     }
 

@@ -100,6 +100,27 @@ else
   echo "• AI 分类器未配置（非交互安装）。需要时运行： $BIN_DIR/configure-llm.sh"
 fi
 
+# 5) record the source repo so the app can offer in-app self-update
+#    (only works when installed from a git clone of your GitHub remote).
+REPO_ROOT="$(cd "$SRC_DIR/../.." && pwd)"
+REMOTE_URL="$(git -C "$REPO_ROOT" remote get-url origin 2>/dev/null || true)"
+if [ -n "$REMOTE_URL" ]; then
+  REPO_ROOT="$REPO_ROOT" REMOTE_URL="$REMOTE_URL" \
+  BRANCH_NAME="$(git -C "$REPO_ROOT" branch --show-current 2>/dev/null || echo main)" \
+  python3 - "$HOME/.agent-status-board/update.json" <<'PY'
+import json, os, re, sys
+remote = os.environ["REMOTE_URL"]
+data = {"checkout": os.environ["REPO_ROOT"], "branch": os.environ.get("BRANCH_NAME", "main"), "remote": remote}
+m = re.search(r'github\.com[:/]+([^/]+)/([^/.]+)', remote)
+if m:
+    data["owner"], data["repo"] = m.group(1), m.group(2)
+open(sys.argv[1], "w").write(json.dumps(data, indent=2))
+print("recorded source repo for self-update:", data.get("owner"), "/", data.get("repo"))
+PY
+else
+  echo "（非 git 克隆，跳过自更新配置；想用 App 内更新，请先从 GitHub git clone 再跑本脚本）"
+fi
+
 echo "done."
 echo "  • Claude Code: start a new session to begin emitting events."
 echo "  • Codex: 在「设置 → 编码 → 钩子 → 用户配置（7 个钩子）」里信任/启用这些 hooks"
