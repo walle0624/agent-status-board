@@ -48,6 +48,6 @@ echo "编译…"
 echo "重装并重启…"
 ( cd "$NEWSRC" && bash script/agent-hooks/autostart.sh on )
 
-# Refresh the local source so the next check/update is current.
-/usr/bin/rsync -a --delete --exclude '.git' "$NEWSRC" "$CHECKOUT/" 2>/dev/null || /usr/bin/ditto "$NEWSRC" "$CHECKOUT"
+# Refresh the local source so the next check/update is current (keep build dirs).
+/usr/bin/rsync -a --delete --exclude '.git' --exclude '.build' --exclude 'dist' "$NEWSRC" "$CHECKOUT/" 2>/dev/null || true
 echo "✅ 已更新到 $(tr -d '[:space:]' < "$CHECKOUT/VERSION" 2>/dev/null)"
