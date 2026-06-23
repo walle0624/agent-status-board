@@ -46,3 +46,20 @@ bash script/agent-hooks/uninstall.sh   # restore original configs
 
 Hooks take effect on the next new Claude Code session / Codex restart.
 The app is read-only: it never continues, stops, or mutates any Codex/CC work.
+
+## 发版（维护者）
+
+改完代码后，一条命令完成「改版本号 + 提交 + 打 tag + 推送 + 建 GitHub Release」：
+
+```bash
+# 1) 先在 CHANGELOG.md 顶部写好新版段落，例如：
+#      ## v1.15
+#      - 改了什么…
+# 2) 发版（自动把该段落当作 Release 说明）：
+bash script/release.sh 1.15        # 指定版本号
+bash script/release.sh next        # 自动 +1（1.14 → 1.15）
+bash script/release.sh 1.15 -n     # --dry-run 空跑预览，不改任何东西
+```
+
+版本号即 `VERSION` 文件。推送后，所有装了本组件的人会在下次检查（每小时）或
+重启时收到「有新版本 · 点击更新」提示。更新源由 `update-source.json` 指定。
