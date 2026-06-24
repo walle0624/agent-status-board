@@ -32,6 +32,14 @@ enum Glass {
         if pct >= 50 { return amber }
         return green
     }
+
+    /// Traffic-light color for a REMAINING level (like a battery): green when
+    /// plenty is left (充足) → amber → red when almost out (耗尽).
+    static func loadRemaining(_ remaining: Double) -> Color {
+        if remaining <= 20 { return red }
+        if remaining <= 50 { return amber }
+        return green
+    }
 }
 
 struct DesktopWidgetView: View {
@@ -409,10 +417,10 @@ struct DesktopWidgetView: View {
         VStack(alignment: .leading, spacing: 10) {
             Divider().overlay(Glass.hairline)
             HStack(spacing: 6) {
-                Text("用量").font(.system(size: 11)).foregroundStyle(Glass.textTertiary)
+                Text("余量").font(.system(size: 11)).foregroundStyle(Glass.textTertiary)
                 Spacer()
                 legendItem(Glass.green, "充足")
-                legendItem(Glass.amber, "偏高")
+                legendItem(Glass.amber, "偏低")
                 legendItem(Glass.red, "耗尽")
             }
             if store.claudeAvailable {
@@ -472,14 +480,15 @@ struct DesktopWidgetView: View {
     }
 
     private func usageRow(_ label: String, _ w: UsageWindow) -> some View {
-        HStack(spacing: 10) {
+        let remaining = max(0, 100 - w.usedPercent)        // 像电量：还剩多少
+        return HStack(spacing: 10) {
             Text(label).font(.system(size: 11)).foregroundStyle(Glass.textSecondary)
                 .frame(width: 40, alignment: .leading)
-            UsageBar(percent: w.usedPercent).frame(maxWidth: .infinity)
-            Text("\(Int(w.usedPercent.rounded()))%")
+            UsageBar(remaining: remaining).frame(maxWidth: .infinity)
+            Text("剩\(Int(remaining.rounded()))%")
                 .font(.system(size: 12, weight: .semibold).monospacedDigit())
                 .foregroundStyle(Glass.textPrimary)
-                .frame(width: 38, alignment: .trailing)
+                .frame(width: 46, alignment: .trailing)
             Text(resetText(w.resetsAt))
                 .font(.system(size: 10)).foregroundStyle(Glass.textTertiary).fixedSize()
         }
@@ -526,14 +535,15 @@ private struct ClickableRow<Content: View>: View {
     }
 }
 
-/// A glossy usage meter: rounded track + a gradient fill (with a top sheen and
-/// soft colored glow) whose color escalates with load. The fill animates when
-/// the value changes.
+/// A glossy battery-style meter: rounded track + a gradient fill whose WIDTH is
+/// the remaining quota (drains as you use it) and whose color goes green (full)
+/// → amber → red (almost out). The fill animates when the value changes.
 private struct UsageBar: View {
-    let percent: Double
+    /// 0…100 — how much quota REMAINS.
+    let remaining: Double
     var body: some View {
         GeometryReader { geo in
-            let w = max(7, geo.size.width * min(1, max(0, percent) / 100))
+            let w = max(7, geo.size.width * min(1, max(0, remaining) / 100))
             ZStack(alignment: .leading) {
                 Capsule().fill(Color.white.opacity(0.08))
                 Capsule()
@@ -546,12 +556,12 @@ private struct UsageBar: View {
                     )
                     .frame(width: w)
                     .shadow(color: color.opacity(0.45), radius: 3, y: 0)
-                    .animation(.easeOut(duration: 0.55), value: percent)
+                    .animation(.easeOut(duration: 0.55), value: remaining)
             }
         }
         .frame(height: 7)
     }
-    private var color: Color { Glass.load(percent) }
+    private var color: Color { Glass.loadRemaining(remaining) }
 }
 
 /// A glossy 3D sphere: a radial body (top-left highlight → color), a small

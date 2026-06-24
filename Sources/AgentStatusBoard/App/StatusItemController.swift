@@ -70,9 +70,9 @@ final class StatusItemController: NSObject, NSPopoverDelegate {
     // MARK: - Per-tool ball specs
 
     private struct Ball {
-        let fill: Double          // 0…1 — 5h USAGE (fills up as you use it)
-        let body: NSColor         // load color (bright)
-        let reading: Int          // 5h usage % — the big number inside (<0 → none)
+        let fill: Double          // 0…1 — 5h quota REMAINING (water level; drains as used)
+        let body: NSColor         // load color (bright): green full → red almost out
+        let reading: Int          // 5h remaining % — the big number inside (<0 → none)
         let count: Int            // active task count — number beside (0 → none)
         let countColor: NSColor   // task-status priority color
     }
@@ -96,10 +96,13 @@ final class StatusItemController: NSObject, NSPopoverDelegate {
         var out: [Ball] = []
         func add(_ source: AgentSource, _ usage: ProviderUsage?, _ available: Bool) {
             guard available else { return }
-            let used = max(0, min(100, usage?.short?.usedPercent ?? 0))   // 5h 使用量
+            let used = max(0, min(100, usage?.short?.usedPercent ?? 0))
+            let remaining = 100 - used                                    // 5h 余量（剩余，像电量）
             let (count, priority) = store.snapshot.toolSummary(for: source)
-            out.append(Ball(fill: used / 100, body: load(used),
-                            reading: Int(used.rounded()),
+            // Water level = remaining (drains as used); color green (full) →
+            // amber → red (almost out) keys off how much has been used.
+            out.append(Ball(fill: remaining / 100, body: load(used),
+                            reading: Int(remaining.rounded()),
                             count: count, countColor: statusColor(priority)))
         }
         add(.codex, store.codexUsage, store.codexAvailable)
@@ -120,50 +123,31 @@ final class StatusItemController: NSObject, NSPopoverDelegate {
     }
 
     private func renderImage(balls: [Ball], time t: Double) -> NSImage {
-        let H = max(22, NSStatusBar.system.thickness)   // fill the real menu-bar height
-        let ballD = H - 2.5                              // as large as fits
+        // The status API reports 22, but the (notch-era) menu bar draws taller;
+        // size the image up so the ball fills it instead of floating small.
+        let H = max(24, NSStatusBar.system.thickness)
+        let ballD = H - 1                                // fill the menu-bar height
         let ballY = (H - ballD) / 2
-        let gap: CGFloat = 6
-        let taskFont = NSFont.systemFont(ofSize: ballD * 0.5, weight: .bold)
-        func textW(_ s: String, _ f: NSFont) -> CGFloat { (s as NSString).size(withAttributes: [.font: f]).width }
+        let gap: CGFloat = 4
 
-        // Each unit: a ball plus an optional task-count number beside it (球边上).
-        let units = balls.map { b -> (ball: Ball, task: String, content: CGFloat) in
-            let task = b.count > 0 ? "\(b.count)" : ""
-            return (b, task, ballD + (task.isEmpty ? 0 : 2 + textW(task, taskFont)))
-        }
-        let w = units.reduce(0) { $0 + $1.content } + gap * CGFloat(max(0, units.count - 1)) + 4
-
+        let w = CGFloat(balls.count) * ballD + gap * CGFloat(max(0, balls.count - 1)) + 4
         let image = NSImage(size: NSSize(width: max(ballD + 4, w), height: H))
         image.lockFocus()
-
         var x: CGFloat = 2
-        for u in units {
-            let rect = NSRect(x: x, y: ballY, width: ballD, height: ballD)
-            drawBall(u.ball, in: rect, t: t)
-
-            // Task count beside the ball, in the highest-priority status color,
-            // haloed so it reads on a light or dark menu bar.
-            if !u.task.isEmpty {
-                let shadow = NSShadow()
-                shadow.shadowColor = NSColor.black.withAlphaComponent(0.55)
-                shadow.shadowBlurRadius = 1.5
-                shadow.shadowOffset = .zero
-                let attrs: [NSAttributedString.Key: Any] = [.font: taskFont, .foregroundColor: u.ball.countColor, .shadow: shadow]
-                let s = u.task as NSString
-                let sz = s.size(withAttributes: attrs)
-                s.draw(at: NSPoint(x: rect.maxX + 2, y: rect.midY - sz.height / 2), withAttributes: attrs)
-            }
-            x += u.content + gap
+        for ball in balls {
+            drawBall(ball, in: NSRect(x: x, y: ballY, width: ballD, height: ballD), t: t)
+            x += ballD + gap
         }
         image.unlockFocus()
         image.isTemplate = false
         return image
     }
 
-    /// One glossy liquid ball that fills up with 5h usage: dark body, a sloshing
-    /// colored fill to the usage level, a sheen, the usage-% number (centered,
-    /// white), and a rim. (The task count is drawn beside it by the caller.)
+    /// One glossy liquid ball showing 5h quota REMAINING: dark body, a sloshing
+    /// colored fill at the remaining water level (drains as you use the quota),
+    /// a sheen, the remaining-% number (centered, white), and a rim. Color goes
+    /// green (full) → amber → red (almost out). A status-colored count badge
+    /// sits on its upper-right corner.
     private func drawBall(_ ball: Ball, in rect: NSRect, t: Double) {
         guard let ctx = NSGraphicsContext.current else { return }
         ctx.saveGraphicsState()
@@ -193,31 +177,36 @@ final class StatusItemController: NSObject, NSPopoverDelegate {
             p.close()
             return p
         }
-        ball.body.withAlphaComponent(0.96).setFill()
-        surface(0).fill()
-        // Brighter sheen line just under the surface.
-        (ball.body.blended(withFraction: 0.35, of: .white) ?? ball.body)
-            .withAlphaComponent(0.6).setFill()
-        surface(amp * 1.4).fill()
+        // Liquid: a vertical gradient — lighter near the surface, deeper toward
+        // the bottom (好看的渐变), clipped to the sloshing water shape.
+        let lightTop = (ball.body.blended(withFraction: 0.62, of: .white) ?? ball.body).withAlphaComponent(0.98)
+        let deepBottom = (ball.body.blended(withFraction: 0.52, of: .black) ?? ball.body).withAlphaComponent(0.98)
+        if let grad = NSGradient(starting: deepBottom, ending: lightTop) {
+            grad.draw(in: surface(0), angle: 90)
+        } else {
+            ball.body.setFill(); surface(0).fill()
+        }
 
-        // Glossy top-left highlight.
-        NSColor.white.withAlphaComponent(0.26).setFill()
+        // Glossy top-left highlight (kept light so it doesn't wash out the gradient).
+        NSColor.white.withAlphaComponent(0.16).setFill()
         NSBezierPath(ovalIn: NSRect(x: rect.minX + rect.width * 0.16, y: rect.maxY - rect.height * 0.42,
                                     width: rect.width * 0.48, height: rect.height * 0.30)).fill()
         ctx.restoreGraphicsState()
 
-        // Center: 5h usage %, white, haloed for legibility on any fill.
+        // Center: 5h remaining %, white, haloed for legibility on any fill.
         if ball.reading >= 0 {
             let s = "\(ball.reading)" as NSString
-            let scale: CGFloat = s.length >= 3 ? 0.34 : (s.length == 2 ? 0.46 : 0.56)
-            let f = NSFont.systemFont(ofSize: rect.height * scale, weight: .semibold)
+            let scale: CGFloat = s.length >= 3 ? 0.36 : (s.length == 2 ? 0.50 : 0.62)
+            let f = NSFont.systemFont(ofSize: rect.height * scale, weight: .bold)
             let shadow = NSShadow()
             shadow.shadowColor = NSColor.black.withAlphaComponent(0.8)
             shadow.shadowBlurRadius = 1.4
             shadow.shadowOffset = .zero
             let attrs: [NSAttributedString.Key: Any] = [.font: f, .foregroundColor: NSColor.white, .shadow: shadow]
             let sz = s.size(withAttributes: attrs)
-            s.draw(at: NSPoint(x: rect.midX - sz.width / 2, y: rect.midY - sz.height / 2), withAttributes: attrs)
+            // Nudge slightly down-left when a corner badge is present, to clear it.
+            let off: CGFloat = ball.count > 0 ? 1.4 : 0
+            s.draw(at: NSPoint(x: rect.midX - sz.width / 2 - off, y: rect.midY - sz.height / 2 - off), withAttributes: attrs)
         }
 
         // (The task-count number is drawn beside the ball — 球边上 — by the caller.)
@@ -225,5 +214,26 @@ final class StatusItemController: NSObject, NSPopoverDelegate {
         // Rim.
         NSColor.white.withAlphaComponent(0.20).setStroke()
         let rim = NSBezierPath(ovalIn: rect.insetBy(dx: 0.5, dy: 0.5)); rim.lineWidth = 0.8; rim.stroke()
+
+        // Task-count badge: a small glossy bead on the upper-right in the status
+        // color — attached to the ball so the count no longer floats off alone.
+        if ball.count > 0 {
+            let bd = rect.width * 0.48
+            let br = NSRect(x: rect.maxX - bd, y: rect.maxY - bd, width: bd, height: bd)
+            let light = ball.countColor.blended(withFraction: 0.42, of: .white) ?? ball.countColor
+            let dark = ball.countColor.blended(withFraction: 0.14, of: .black) ?? ball.countColor
+            if let g = NSGradient(starting: dark, ending: light) {
+                g.draw(in: NSBezierPath(ovalIn: br), angle: 90)
+            } else {
+                ball.countColor.setFill(); NSBezierPath(ovalIn: br).fill()
+            }
+            NSColor.black.withAlphaComponent(0.30).setStroke()
+            let ring = NSBezierPath(ovalIn: br.insetBy(dx: 0.45, dy: 0.45)); ring.lineWidth = 0.7; ring.stroke()
+            let bf = NSFont.systemFont(ofSize: bd * 0.62, weight: .bold)
+            let bs = "\(ball.count)" as NSString
+            let battrs: [NSAttributedString.Key: Any] = [.font: bf, .foregroundColor: NSColor.white]
+            let bsz = bs.size(withAttributes: battrs)
+            bs.draw(at: NSPoint(x: br.midX - bsz.width / 2, y: br.midY - bsz.height / 2), withAttributes: battrs)
+        }
     }
 }
