@@ -24,8 +24,15 @@ APP_SRC="$ROOT_DIR/dist/AgentStatusBoard.app"
 [ -d "$APP_SRC" ] || { echo "build first: ./script/build_and_run.sh run" >&2; exit 1; }
 
 mkdir -p "$HOME/Applications" "$HOME/Library/LaunchAgents"
-# Stop any running copy, then install the latest build to a stable location.
-launchctl unload "$PLIST" 2>/dev/null || true
+UID_="$(id -u)"
+DOMAIN="gui/$UID_"
+
+# Stop the running copy WITHOUT tearing down the launchd job. During a
+# self-update this script runs as a detached descendant of the app's OWN launchd
+# job; `launchctl unload`/`bootout` here can take the updater down with the job,
+# and a legacy `launchctl load` from that context reloads the app into the wrong
+# (dying) bootstrap domain so it never actually appears. pkill only hits the app
+# binary, not the bash updater.
 pkill -x AgentStatusBoard >/dev/null 2>&1 || true
 rm -rf "$APP_DST"
 cp -R "$APP_SRC" "$APP_DST"
@@ -45,5 +52,14 @@ cat > "$PLIST" <<EOF
 </plist>
 EOF
 
-launchctl load "$PLIST"
+# Start the freshly-installed app in the user's GUI session. Target gui/<uid>
+# explicitly so it works even when called from a launchd-spawned updater: if the
+# agent is already registered (the self-update case) restart its instance with
+# the new binary; otherwise register it (RunAtLoad starts it). `open` is a
+# universal fallback that always launches into the GUI session.
+if launchctl print "$DOMAIN/$LABEL" >/dev/null 2>&1; then
+  launchctl kickstart -k "$DOMAIN/$LABEL" 2>/dev/null || open "$APP_DST"
+else
+  launchctl bootstrap "$DOMAIN" "$PLIST" 2>/dev/null || launchctl load "$PLIST" 2>/dev/null || open "$APP_DST"
+fi
 echo "autostart enabled. App installed at $APP_DST and started."

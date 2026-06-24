@@ -8,10 +8,11 @@ struct SessionEventCollector: TaskCollecting {
     let dir: URL
     /// Drop any unfinished entry not refreshed within this window (process likely died without cleanup).
     let staleAfter: TimeInterval
-    /// A running/thinking session with no real activity (its transcript/rollout
-    /// untouched) for this long is treated as finished. A session that was
-    /// closed or killed never fires Stop, so it would otherwise hang in
-    /// "正在执行" until `staleAfter`. Such an entry is reclassified to `done`.
+    /// A running/thinking session whose hook hasn't fired within this window is
+    /// not actually running (finished without Stop, killed, or deleted) and is
+    /// dropped from the board. Keyed on the hook's own timestamp — NOT the
+    /// transcript file mtime, which background writes (title generation, a
+    /// deletion touching the file) would otherwise make look like activity.
     let runningStaleAfter: TimeInterval
     /// Keep finished sessions this long so the most-recent few stay visible
     /// across restarts and overnight ("明早一眼看到昨天干了啥").
@@ -58,7 +59,7 @@ struct SessionEventCollector: TaskCollecting {
             }
 
             guard let source = AgentSource(rawValue: record.source),
-                  var status = AgentTaskStatus(rawValue: record.status) else {
+                  let status = AgentTaskStatus(rawValue: record.status) else {
                 continue
             }
 
@@ -68,44 +69,37 @@ struct SessionEventCollector: TaskCollecting {
                 ? String(record.key.dropFirst(prefix.count))
                 : record.key
 
-            // Drop sessions the user deleted/archived (artifact gone), and grab
-            // the artifact's own last-write time when it's still there. An empty
-            // map means the listing failed, so we fail open (show).
-            var artifactMtime: Date?
+            // Drop sessions the user deleted (CC transcript removed) or archived
+            // (Codex rollout moved out of ~/.codex/sessions/). An empty map means
+            // the listing failed, so we fail open (show).
             switch source {
             case .claudeCode:
-                if !liveCC.isEmpty {
-                    guard !rawId.isEmpty, let m = liveCC[rawId] else { continue }
-                    artifactMtime = m
-                }
+                if !liveCC.isEmpty, rawId.isEmpty || liveCC[rawId] == nil { continue }
             case .codex:
-                if !liveCodex.isEmpty {
-                    guard !rawId.isEmpty, let m = liveCodex[rawId] else { continue }
-                    artifactMtime = m
-                }
+                if !liveCodex.isEmpty, rawId.isEmpty || liveCodex[rawId] == nil { continue }
             default:
                 break
             }
 
-            // Last real activity = newest of the hook's status write and the
-            // session artifact's own last write (a killed session can leave the
-            // status frozen while its transcript was written slightly later).
-            let lastActivity = max(record.updatedAt, artifactMtime ?? record.updatedAt)
+            // Activity = the hook's OWN timestamp. We deliberately do not use the
+            // transcript/rollout file mtime: background writes (title generation,
+            // or the app touching a session you just deleted) bump the file mtime
+            // and would make a dead/deleted session look like it's still running.
+            let age = now.timeIntervalSince(record.updatedAt)
 
-            // A "running"/"thinking" session idle past runningStaleAfter was
-            // closed/killed without firing Stop — treat it as finished so it
-            // leaves 正在执行 instead of hanging there until staleAfter.
-            if status == .running || status == .thinking,
-               now.timeIntervalSince(lastActivity) > runningStaleAfter {
-                status = .done
+            // A "running"/"thinking" session whose hooks have gone quiet this long
+            // is not actually running — it finished without firing Stop, was
+            // killed, or was deleted. Drop it entirely, so a deleted session never
+            // lingers as "正在执行" (and doesn't reappear as a fake completion).
+            if (status == .running || status == .thinking), age > runningStaleAfter {
+                continue
             }
 
-            // Retention: keep finished work for keepCompletedAfter (so the most
-            // recent few survive restarts / overnight); drop unfinished entries
-            // whose process clearly died.
+            // Retention: keep finished work for keepCompletedAfter (recent ones
+            // survive restarts / overnight); drop anything else past staleAfter.
             if status == .done {
-                if now.timeIntervalSince(lastActivity) > keepCompletedAfter { continue }
-            } else if now.timeIntervalSince(record.updatedAt) > staleAfter {
+                if age > keepCompletedAfter { continue }
+            } else if age > staleAfter {
                 continue
             }
 
@@ -119,7 +113,7 @@ struct SessionEventCollector: TaskCollecting {
                     title: title,
                     workspace: record.cwd.isEmpty ? nil : record.cwd,
                     status: status,
-                    lastActivityAt: lastActivity,
+                    lastActivityAt: record.updatedAt,
                     summary: Self.summary(for: status),
                     evidence: file.path,
                     model: (record.model?.isEmpty == false) ? record.model : nil,
