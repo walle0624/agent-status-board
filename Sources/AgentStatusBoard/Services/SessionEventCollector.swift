@@ -17,18 +17,25 @@ struct SessionEventCollector: TaskCollecting {
     /// Keep finished sessions this long so the most-recent few stay visible
     /// across restarts and overnight ("明早一眼看到昨天干了啥").
     let keepCompletedAfter: TimeInterval
+    /// A "running" CC session whose latest transcript entry is a tool-use still
+    /// awaiting its result for this long is treated as waiting on you (red).
+    /// Claude Code doesn't reliably fire the permission Notification (especially
+    /// for MCP tools), so such a session would otherwise sit amber.
+    let pendingApprovalAfter: TimeInterval
 
     init(
         dir: URL = FileManager.default.homeDirectoryForCurrentUser
             .appendingPathComponent(".agent-status-board/sessions"),
         staleAfter: TimeInterval = 60 * 60 * 12,
         runningStaleAfter: TimeInterval = 60 * 15,
-        keepCompletedAfter: TimeInterval = 60 * 60 * 24 * 14
+        keepCompletedAfter: TimeInterval = 60 * 60 * 24 * 14,
+        pendingApprovalAfter: TimeInterval = 90
     ) {
         self.dir = dir
         self.staleAfter = staleAfter
         self.runningStaleAfter = runningStaleAfter
         self.keepCompletedAfter = keepCompletedAfter
+        self.pendingApprovalAfter = pendingApprovalAfter
     }
 
     func collect(now: Date) async -> [AgentTask] {
@@ -59,7 +66,7 @@ struct SessionEventCollector: TaskCollecting {
             }
 
             guard let source = AgentSource(rawValue: record.source),
-                  let status = AgentTaskStatus(rawValue: record.status) else {
+                  var status = AgentTaskStatus(rawValue: record.status) else {
                 continue
             }
 
@@ -81,22 +88,38 @@ struct SessionEventCollector: TaskCollecting {
                 break
             }
 
-            // Activity = the hook's OWN timestamp. We deliberately do not use the
-            // transcript/rollout file mtime: background writes (title generation,
-            // or the app touching a session you just deleted) bump the file mtime
-            // and would make a dead/deleted session look like it's still running.
-            let age = now.timeIntervalSince(record.updatedAt)
+            // For an ACTIVE Claude Code session, read its transcript directly:
+            //  • the live title (the ai/custom title is often generated AFTER the
+            //    last hook fired, so the hook-captured title is stale — folder name);
+            //  • the last REAL turn's time, so a long-running session whose hooks
+            //    went quiet isn't wrongly dropped (while title-generation writes,
+            //    which bump the file mtime, are ignored);
+            //  • a tool-use pending past pendingApprovalAfter ⇒ waiting on you (CC
+            //    often doesn't fire the permission Notification, esp. for MCP).
+            var liveTitle: String?
+            var lastActivity = record.updatedAt
+            if source == .claudeCode, status == .running || status == .thinking,
+               let url = liveCC[rawId] {
+                let d = Self.ccDetail(url)
+                liveTitle = d.title
+                if let real = d.lastReal { lastActivity = max(lastActivity, real) }
+                if status == .running, let p = d.pendingSince,
+                   now.timeIntervalSince(p) > pendingApprovalAfter {
+                    status = .waitingReview
+                }
+            }
 
-            // A "running"/"thinking" session whose hooks have gone quiet this long
-            // is not actually running — it finished without firing Stop, was
-            // killed, or was deleted. Drop it entirely, so a deleted session never
-            // lingers as "正在执行" (and doesn't reappear as a fake completion).
-            if (status == .running || status == .thinking), age > runningStaleAfter {
+            // A running/thinking session with no recent REAL activity is not
+            // actually running (finished without Stop, killed, or deleted) — drop
+            // it, so a dead/deleted session never lingers as "正在执行".
+            if (status == .running || status == .thinking),
+               now.timeIntervalSince(lastActivity) > runningStaleAfter {
                 continue
             }
 
             // Retention: keep finished work for keepCompletedAfter (recent ones
             // survive restarts / overnight); drop anything else past staleAfter.
+            let age = now.timeIntervalSince(record.updatedAt)
             if status == .done {
                 if age > keepCompletedAfter { continue }
             } else if age > staleAfter {
@@ -104,6 +127,7 @@ struct SessionEventCollector: TaskCollecting {
             }
 
             let title = names.name(forCwd: record.cwd)
+                ?? liveTitle
                 ?? (record.title.isEmpty ? "\(source.displayName) 会话" : record.title)
 
             tasks.append(
@@ -113,7 +137,7 @@ struct SessionEventCollector: TaskCollecting {
                     title: title,
                     workspace: record.cwd.isEmpty ? nil : record.cwd,
                     status: status,
-                    lastActivityAt: record.updatedAt,
+                    lastActivityAt: lastActivity,
                     summary: Self.summary(for: status),
                     evidence: file.path,
                     model: (record.model?.isEmpty == false) ? record.model : nil,
@@ -127,27 +151,67 @@ struct SessionEventCollector: TaskCollecting {
     }
 
     /// Claude Code session ids that still have a transcript on disk
-    /// (~/.claude/projects/<cwd>/<id>.jsonl), mapped to the transcript's
-    /// last-write time. A deleted session loses its file (and drops out).
-    private static func liveClaudeSessions() -> [String: Date] {
+    /// (~/.claude/projects/<cwd>/<id>.jsonl), mapped to its URL. A deleted
+    /// session loses its file (and drops out).
+    private static func liveClaudeSessions() -> [String: URL] {
         let fm = FileManager.default
         let projects = fm.homeDirectoryForCurrentUser.appendingPathComponent(".claude/projects")
         guard let dirs = try? fm.contentsOfDirectory(
             at: projects, includingPropertiesForKeys: nil, options: [.skipsHiddenFiles]
         ) else { return [:] }
-        var ids: [String: Date] = [:]
+        var ids: [String: URL] = [:]
         for dir in dirs {
             guard let files = try? fm.contentsOfDirectory(
-                at: dir, includingPropertiesForKeys: [.contentModificationDateKey], options: [.skipsHiddenFiles]
+                at: dir, includingPropertiesForKeys: nil, options: [.skipsHiddenFiles]
             ) else { continue }
             for f in files where f.pathExtension == "jsonl" {
-                let id = f.deletingPathExtension().lastPathComponent
-                let m = (try? f.resourceValues(forKeys: [.contentModificationDateKey]))?
-                    .contentModificationDate ?? .distantPast
-                ids[id] = m
+                ids[f.deletingPathExtension().lastPathComponent] = f
             }
         }
         return ids
+    }
+
+    /// Reads the tail of a Claude Code transcript and extracts: the live title
+    /// (user-set custom-title preferred, else the auto ai-title), the timestamp
+    /// of the last REAL turn (user/assistant — not title-generation metadata, so
+    /// it reflects actual work), and, when the latest turn is an assistant
+    /// tool-use still awaiting its result, when that tool-use was emitted (a
+    /// "waiting on you / running a tool" signal).
+    private static func ccDetail(_ url: URL) -> (title: String?, lastReal: Date?, pendingSince: Date?) {
+        guard let handle = try? FileHandle(forReadingFrom: url) else { return (nil, nil, nil) }
+        defer { try? handle.close() }
+        let size = (try? handle.seekToEnd()) ?? 0
+        let window: UInt64 = 262_144
+        let start = size > window ? size - window : 0
+        guard (try? handle.seek(toOffset: start)) != nil,
+              let data = try? handle.readToEnd() else { return (nil, nil, nil) }
+        var lines = data.split(separator: 0x0a, omittingEmptySubsequences: true)
+        if start > 0, !lines.isEmpty { lines.removeFirst() }   // drop the partial first line
+
+        let isoF = ISO8601DateFormatter(); isoF.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        let iso = ISO8601DateFormatter(); iso.formatOptions = [.withInternetDateTime]
+        func date(_ v: Any?) -> Date? { (v as? String).flatMap { isoF.date(from: $0) ?? iso.date(from: $0) } }
+
+        var customTitle: String?; var aiTitle: String?
+        var lastReal: Date?; var pendingSince: Date?
+        for line in lines {
+            guard let obj = (try? JSONSerialization.jsonObject(with: Data(line))) as? [String: Any],
+                  let type = obj["type"] as? String else { continue }
+            switch type {
+            case "custom-title": if let t = obj["customTitle"] as? String, !t.isEmpty { customTitle = t }
+            case "ai-title": if let t = obj["aiTitle"] as? String, !t.isEmpty { aiTitle = t }
+            case "user", "assistant":
+                let ts = date(obj["timestamp"])
+                if let ts { lastReal = ts }
+                let hasToolUse = (obj["message"] as? [String: Any])
+                    .flatMap { $0["content"] as? [[String: Any]] }?
+                    .contains { ($0["type"] as? String) == "tool_use" } ?? false
+                pendingSince = (type == "assistant" && hasToolUse) ? (ts ?? pendingSince) : nil
+            default:
+                break
+            }
+        }
+        return (customTitle ?? aiTitle, lastReal, pendingSince)
     }
 
     /// UUIDs of Codex rollouts still under ~/.codex/sessions/, mapped to the
