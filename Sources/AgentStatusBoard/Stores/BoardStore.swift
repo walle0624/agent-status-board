@@ -30,7 +30,8 @@ final class BoardStore: ObservableObject {
     private var lastUpdateCheck: Date = .distantPast
     private var timer: Timer?
 
-    /// Run the local source-update (git pull + rebuild + reinstall + relaunch).
+    /// Run the source self-update (download latest source from GitHub over HTTP,
+    /// rebuild locally, reinstall, relaunch — no git required).
     func applyUpdate() { updateChecker.runUpdate() }
 
     init(collectors: [any TaskCollecting] = [

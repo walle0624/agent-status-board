@@ -62,7 +62,7 @@ final class FloatingWidgetController: NSObject, NSWindowDelegate {
             store: store,
             onClose: { [weak self] in self?.hide() },
             onTogglePin: { [weak self] in self?.togglePin() },
-            onOpen: { [weak self] task in self?.open(task) },
+            onOpen: { task in SessionOpener.open(task) },
             isPinned: pinned
         )
         let hosting = NSHostingView(rootView: root)
@@ -138,33 +138,6 @@ final class FloatingWidgetController: NSObject, NSWindowDelegate {
         if window == nil { show() } else { hide() }
     }
 
-    /// Bring the app that owns this session to the front, deep-linking to the
-    /// specific session when the app supports it.
-    private func open(_ task: AgentTask) {
-        switch task.source {
-        case .codex:
-            // Codex exposes codex://threads/<id>, jumping straight to the thread.
-            if let id = task.sessionId, !id.isEmpty,
-               let url = URL(string: "codex://threads/\(id)") {
-                NSWorkspace.shared.open(url)
-            } else {
-                foreground(bundleId: "com.openai.codex")
-            }
-        case .claudeCode:
-            // The Claude desktop app has no public per-session deep link; the
-            // best we can do is bring it to the front.
-            foreground(bundleId: "com.anthropic.claudefordesktop")
-        default:
-            break
-        }
-    }
-
-    private func foreground(bundleId: String) {
-        let ws = NSWorkspace.shared
-        guard let url = ws.urlForApplication(withBundleIdentifier: bundleId) else { return }
-        ws.openApplication(at: url, configuration: NSWorkspace.OpenConfiguration())
-    }
-
     private func togglePin() {
         pinned.toggle()
         if let window { applyLevel(window) }
@@ -174,7 +147,7 @@ final class FloatingWidgetController: NSObject, NSWindowDelegate {
                 store: store,
                 onClose: { [weak self] in self?.hide() },
                 onTogglePin: { [weak self] in self?.togglePin() },
-                onOpen: { [weak self] task in self?.open(task) },
+                onOpen: { task in SessionOpener.open(task) },
                 isPinned: pinned
             )
             (window.contentView as? NSHostingView<DesktopWidgetView>)?.rootView = root

@@ -8,8 +8,7 @@ struct AgentStatusBoardApp: App {
 
     var body: some Scene {
         WindowGroup("Agent Status Board", id: "dashboard") {
-            MenuBarPanelView(store: store)
-                .frame(width: 380)
+            DesktopWidgetView(store: store, onOpen: { SessionOpener.open($0) }, inPopover: true)
                 .task {
                     store.start()
                 }
@@ -47,8 +46,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             widget?.show()
         })
 
-        // Suppress the auto-opened WindowGroup window; the dashboard panel is
-        // reachable from the menu bar popover instead.
+        // Suppress the auto-opened WindowGroup window; the live panel is the
+        // menu-bar popover and the desktop floating widget.
         DispatchQueue.main.async {
             for w in NSApp.windows where w.title == "Agent Status Board" {
                 w.close()

@@ -40,6 +40,9 @@ struct DesktopWidgetView: View {
     var onTogglePin: () -> Void = {}
     var onOpen: (AgentTask) -> Void = { _ in }
     var isPinned: Bool = true
+    /// Hosted inside the menu-bar popover rather than the floating window:
+    /// drop the window chrome (pin/close, drop shadow, outer margin).
+    var inPopover: Bool = false
     @State private var appeared = false
     @State private var updating = false
 
@@ -50,15 +53,19 @@ struct DesktopWidgetView: View {
     private var running: [AgentTask] {
         snapshot.visibleTasks.filter { $0.status == .running || $0.status == .thinking }
     }
-    /// Completed sessions in the snapshot window, newest first — listed under
-    /// "今日完成" at the bottom. Count equals the list length, so the number and
-    /// the detail always agree.
-    private var doneTasks: [AgentTask] {
-        snapshot.visibleTasks
+    /// The most-recent completed sessions, newest first and de-duplicated by
+    /// session (one row per session, its latest finish). Kept across restarts
+    /// and overnight so you can see — and click back into — what you last
+    /// worked on. Capped to a handful to stay glanceable.
+    private var recentDone: [AgentTask] {
+        var seen = Set<String>()
+        return snapshot.visibleTasks
             .filter { $0.status == .done }
             .sorted { $0.lastActivityAt > $1.lastActivityAt }
+            .filter { seen.insert($0.sessionId ?? $0.id).inserted }
+            .prefix(5)
+            .map { $0 }
     }
-    private var doneCount: Int { doneTasks.count }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
@@ -72,10 +79,10 @@ struct DesktopWidgetView: View {
             } else if !running.isEmpty {
                 runningBlock                           // amber hero: work in progress
             }
-            if doneCount > 0 {
-                todayDoneBlock                         // 今日完成 N + 明细列表
+            if !recentDone.isEmpty {
+                recentDoneBlock                        // 最近完成（跨天保留，可点击回去继续）
             }
-            if attention.isEmpty && running.isEmpty && doneCount == 0 {
+            if attention.isEmpty && running.isEmpty && recentDone.isEmpty {
                 calmState                              // truly idle
             }
             if store.claudeAvailable || store.codexUsage != nil {
@@ -117,8 +124,9 @@ struct DesktopWidgetView: View {
         )
         // Tight contact shadow only. Must stay well inside the outer padding
         // below, or the window edge clips it into a hard rectangular line.
-        .shadow(color: .black.opacity(0.28), radius: 8, y: 4)
-        .padding(22)
+        // In the popover the system provides the chrome, so drop both.
+        .shadow(color: .black.opacity(inPopover ? 0 : 0.28), radius: 8, y: 4)
+        .padding(inPopover ? 10 : 22)
         .opacity(appeared ? 1 : 0)
         .scaleEffect(appeared ? 1 : 0.97)
         .onAppear { withAnimation(.spring(response: 0.42, dampingFraction: 0.82)) { appeared = true } }
@@ -129,13 +137,15 @@ struct DesktopWidgetView: View {
     private var header: some View {
         let st = snapshot.overallStatus
         return HStack(spacing: 8) {
-            Button(action: onTogglePin) {
-                Image(systemName: isPinned ? "pin.fill" : "pin")
-                    .font(.system(size: 11))
-                    .foregroundStyle(isPinned ? Glass.textSecondary : Glass.textTertiary)
+            if !inPopover {
+                Button(action: onTogglePin) {
+                    Image(systemName: isPinned ? "pin.fill" : "pin")
+                        .font(.system(size: 11))
+                        .foregroundStyle(isPinned ? Glass.textSecondary : Glass.textTertiary)
+                }
+                .buttonStyle(.plain)
+                .help(isPinned ? "取消置顶" : "置顶")
             }
-            .buttonStyle(.plain)
-            .help(isPinned ? "取消置顶" : "置顶")
 
             Text("Agent 状态")
                 .font(.system(size: 13, weight: .medium))
@@ -155,11 +165,13 @@ struct DesktopWidgetView: View {
             .buttonStyle(.plain)
             .help("刷新")
 
-            Button(action: onClose) {
-                LEDDot(color: Glass.red, flashing: false, size: 12)
+            if !inPopover {
+                Button(action: onClose) {
+                    LEDDot(color: Glass.red, flashing: false, size: 12)
+                }
+                .buttonStyle(.plain)
+                .help("隐藏（可从菜单栏重新打开）")
             }
-            .buttonStyle(.plain)
-            .help("隐藏（可从菜单栏重新打开）")
         }
     }
 
@@ -341,36 +353,45 @@ struct DesktopWidgetView: View {
         .padding(.vertical, 2)
     }
 
-    // MARK: today's completed
+    // MARK: recently completed (kept across days)
 
-    /// "今日完成 N" plus a detail list of completed sessions (newest first),
-    /// each row clickable to reopen. The count equals the listed total.
-    private var todayDoneBlock: some View {
+    /// "最近完成" — the last few finished sessions, deduped and kept across days
+    /// so you can pick up yesterday's work. Each row is clickable to reopen its
+    /// session right where you left off.
+    private var recentDoneBlock: some View {
         VStack(alignment: .leading, spacing: 5) {
             Divider().overlay(Glass.hairline)
-            Text("今日完成 · \(doneCount)")
+            Text("最近完成 · \(recentDone.count)")
                 .font(.system(size: 11)).foregroundStyle(Glass.textTertiary)
-            ForEach(doneTasks.prefix(6)) { task in
+            ForEach(recentDone) { task in
                 sessionRow(task, color: Glass.green, detail: doneDetail(task), detailLines: 1)
-            }
-            if doneCount > 6 {
-                Text("…还有 \(doneCount - 6) 个")
-                    .font(.system(size: 11)).foregroundStyle(Glass.textTertiary)
-                    .padding(.leading, 2)
             }
         }
     }
 
-    /// Detail line for a completed row: when it finished, plus the LLM summary
-    /// of what happened (falling back to the workspace path).
+    /// Detail line for a completed row: when it finished (calendar-aware, so it
+    /// reads right across days), plus the LLM summary of what happened (falling
+    /// back to the workspace path).
     private func doneDetail(_ task: AgentTask) -> String {
-        var parts = [timeAgo(task.lastActivityAt)]
+        var parts = [doneWhen(task.lastActivityAt)]
         if let n = task.note, !n.isEmpty {
             parts.append(n)
         } else if let w = task.workspace, !w.isEmpty {
             parts.append((w as NSString).abbreviatingWithTildeInPath)
         }
         return parts.joined(separator: " · ")
+    }
+
+    /// Calendar-aware finish time for a completed row: "今天 14:30" /
+    /// "昨天 19:25" / "6/21 10:00".
+    private func doneWhen(_ date: Date) -> String {
+        let cal = Calendar.current
+        let f = DateFormatter()
+        f.locale = Locale(identifier: "zh_CN")
+        if cal.isDateInToday(date) { f.dateFormat = "HH:mm"; return "今天 " + f.string(from: date) }
+        if cal.isDateInYesterday(date) { f.dateFormat = "HH:mm"; return "昨天 " + f.string(from: date) }
+        f.dateFormat = "M/d HH:mm"
+        return f.string(from: date)
     }
 
     /// Short relative time like "刚刚" / "3 分钟前" / "2 小时前", per the snapshot.

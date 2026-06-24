@@ -149,6 +149,18 @@ struct AgentSnapshot: Equatable, Sendable {
         }.count
     }
 
+    /// Per-tool menu-bar ball: how many of this tool's tasks are "in play"
+    /// (unfinished, plus those finished within the last 10 minutes), and the
+    /// highest-priority status among them — which drives the number's color
+    /// (red 需处理 > amber 进行中 > green 已完成).
+    func toolSummary(for source: AgentSource) -> (count: Int, priority: BoardOverallStatus) {
+        let mine = tasks.filter { $0.source == source }
+        let pool = mine.filter {
+            $0.status != .done || refreshedAt.timeIntervalSince($0.lastActivityAt) <= 600
+        }
+        return (pool.count, Self.aggregate(of: pool))
+    }
+
     var attentionCount: Int {
         tasks.filter { [.waitingReview, .blocked, .failed, .stale].contains($0.status) }.count
     }

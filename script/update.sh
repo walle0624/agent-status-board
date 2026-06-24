@@ -48,6 +48,20 @@ echo "编译…"
 echo "重装并重启…"
 ( cd "$NEWSRC" && bash script/agent-hooks/autostart.sh on )
 
+# Refresh the stable hook scripts so hook improvements ship with the update.
+# Content-compare only, and we NEVER touch ~/.codex/config.toml: Codex keys hook
+# trust on the command string (unchanged), not the script's content, so this
+# triggers no re-approval.
+SBIN="$HOME/.agent-status-board/bin"
+if [ -d "$SBIN" ]; then
+  for s in record.sh cc-hook.sh codex-hook.sh codex-notify.sh classify.py configure-llm.sh cc-token-setup.sh; do
+    src="${NEWSRC}script/agent-hooks/$s"
+    if [ -f "$src" ] && ! cmp -s "$src" "$SBIN/$s" 2>/dev/null; then
+      cp "$src" "$SBIN/$s"; chmod +x "$SBIN/$s"
+    fi
+  done
+fi
+
 # Refresh the local source so the next check/update is current (keep build dirs).
 /usr/bin/rsync -a --delete --exclude '.git' --exclude '.build' --exclude 'dist' "$NEWSRC" "$CHECKOUT/" 2>/dev/null || true
 echo "✅ 已更新到 $(tr -d '[:space:]' < "$CHECKOUT/VERSION" 2>/dev/null)"
