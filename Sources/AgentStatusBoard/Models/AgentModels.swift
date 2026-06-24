@@ -149,16 +149,14 @@ struct AgentSnapshot: Equatable, Sendable {
         }.count
     }
 
-    /// Per-tool menu-bar ball: how many of this tool's tasks are "in play"
-    /// (unfinished, plus those finished within the last 10 minutes), and the
-    /// highest-priority status among them — which drives the number's color
-    /// (red 需处理 > amber 进行中 > green 已完成).
+    /// Per-tool menu-bar badge: how many of this tool's tasks are ACTIVE
+    /// (running/thinking, or needing you), and the highest-priority status among
+    /// them (red 需处理 > amber 进行中). Completed tasks are excluded — an
+    /// all-done tool gets no badge, so the menu bar only surfaces what still
+    /// needs attention.
     func toolSummary(for source: AgentSource) -> (count: Int, priority: BoardOverallStatus) {
-        let mine = tasks.filter { $0.source == source }
-        let pool = mine.filter {
-            $0.status != .done || refreshedAt.timeIntervalSince($0.lastActivityAt) <= 600
-        }
-        return (pool.count, Self.aggregate(of: pool))
+        let active = tasks.filter { $0.source == source && $0.status != .done }
+        return (active.count, Self.aggregate(of: active))
     }
 
     var attentionCount: Int {
