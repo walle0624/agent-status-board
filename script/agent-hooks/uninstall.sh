@@ -33,16 +33,46 @@ print("removed Claude Code hooks ->", path)
 PY
 fi
 
-# 2) Codex: restore the original notify program
+# 2) Codex: remove our hook block and restore the original notify program, if any.
 CODEX_CFG="$HOME/.codex/config.toml"
-ORIG='notify = ["/Users/walle/.codex/computer-use/Codex Computer Use.app/Contents/SharedSupport/SkyComputerUseClient.app/Contents/MacOS/SkyComputerUseClient", "turn-ended"]'
+ORIG_JSON="$HOME/.agent-status-board/codex-notify-original.json"
 if [ -f "$CODEX_CFG" ]; then
   cp "$CODEX_CFG" "$CODEX_CFG.bak.$(date +%Y%m%d%H%M%S)"
-  python3 - "$CODEX_CFG" "$ORIG" <<'PY'
-import re, sys
-path, orig = sys.argv[1], sys.argv[2]
+  python3 - "$CODEX_CFG" "$ORIG_JSON" "$BIN_DIR/codex-notify.sh" <<'PY'
+import json, os, re, sys
+path, orig_json, wrapper = sys.argv[1], sys.argv[2], sys.argv[3]
 txt = open(path).read()
-txt = re.sub(r'(?m)^\s*notify\s*=.*$', orig, txt, count=1)
+
+MARK = "# >>> agent-status-board hooks >>>"
+END = "# <<< agent-status-board hooks <<<"
+txt = re.sub(re.escape(MARK) + r".*?" + re.escape(END) + r"\n?", "", txt, flags=re.S)
+
+def toml_string(value):
+    return json.dumps(str(value), ensure_ascii=False)
+
+def notify_line(args):
+    return "notify = [" + ", ".join(toml_string(a) for a in args) + "]"
+
+original = None
+try:
+    data = json.load(open(orig_json))
+    if isinstance(data, list) and data:
+        original = [str(x) for x in data]
+except Exception:
+    pass
+
+notify_re = re.compile(r'(?m)^\s*notify\s*=\s*\[[^\n]*\]\s*$')
+nm = notify_re.search(txt)
+if original:
+    line = notify_line(original)
+    if nm:
+        txt = txt[:nm.start()] + line + txt[nm.end():]
+    else:
+        m = re.search(r'(?m)^\[', txt)
+        txt = (txt[:m.start()] + line + "\n\n" + txt[m.start():]) if m else (txt.rstrip() + "\n" + line + "\n")
+elif nm and "codex-notify.sh" in nm.group(0):
+    txt = txt[:nm.start()] + txt[nm.end():]
+
 open(path,"w").write(txt)
 print("restored Codex notify ->", path)
 PY
