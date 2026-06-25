@@ -22,7 +22,7 @@ for s in record.sh cc-hook.sh codex-hook.sh codex-notify.sh classify.py configur
     cp "$SRC_DIR/$s" "$BIN_DIR/$s"; chmod +x "$BIN_DIR/$s"; _changed=$((_changed+1))
   fi
 done
-echo "installed scripts -> $BIN_DIR（更新 $_changed 个）"
+echo "installed scripts -> ${BIN_DIR}（更新 ${_changed} 个）"
 
 # The "needs input" classifier (classify.py) is portable: it talks to any
 # OpenAI-compatible endpoint (Aliyun DashScope compatible-mode, OpenAI, DeepSeek,
@@ -78,10 +78,12 @@ txt = open(path).read()
 events = ["UserPromptSubmit","PreToolUse","PostToolUse",
           "PreCompact","PostCompact","PermissionRequest","Stop"]
 desired = [f"command = '{hook} {e}'" for e in events]
+notify_wrapper = os.path.join(os.path.dirname(hook), "codex-notify.sh")
+notify_wrapped = re.search(r'(?m)^\s*notify\s*=\s*\[[^\n]*codex-notify\.sh[^\n]*\]\s*$', txt)
 
 # Already wired → DO NOTHING. This is the fix: no rewrite means Codex's
 # [hooks.state] trust hashes survive, so you never re-approve on an update.
-if all(d in txt for d in desired):
+if all(d in txt for d in desired) and notify_wrapped:
     print("Codex hooks 已就绪，未改动（保留信任，无需重新审核）")
     sys.exit(0)
 
@@ -109,10 +111,26 @@ txt = txt.rstrip() + "\n\n" + "\n".join(block) + "\n"
 if state:                       # re-attach AFTER the fence so it's never swallowed again
     txt = txt.rstrip() + "\n\n" + state
 
-# Wire notify too (only if none exists) so turn-end works even before hooks are trusted.
-if not re.search(r'(?m)^\s*notify\s*=', txt):
+# Wire notify too so turn-end works even before hooks are trusted. If Codex
+# already had a notify command, save it and let codex-notify.sh pass through.
+notify_re = re.compile(r'(?m)^\s*notify\s*=\s*\[[^\n]*\]\s*$')
+nm = notify_re.search(txt)
+if nm:
+    line = nm.group(0)
+    if "codex-notify.sh" not in line:
+        try:
+            import ast, json
+            original = ast.literal_eval(line.split("=", 1)[1].strip())
+            if isinstance(original, list) and original:
+                out = os.path.expanduser("~/.agent-status-board/codex-notify-original.json")
+                os.makedirs(os.path.dirname(out), exist_ok=True)
+                open(out, "w").write(json.dumps(original, indent=2))
+        except Exception:
+            pass
+        txt = txt[:nm.start()] + 'notify = ["%s"]' % notify_wrapper + txt[nm.end():]
+else:
     m = re.search(r'(?m)^\[', txt)
-    line = 'notify = ["%s/codex-notify.sh"]\n' % os.path.dirname(hook)
+    line = 'notify = ["%s"]\n' % notify_wrapper
     txt = (txt[:m.start()] + line + "\n" + txt[m.start():]) if m else (txt + line)
 
 shutil.copy(path, path + ".bak." + time.strftime("%Y%m%d%H%M%S"))   # back up only when actually changing
