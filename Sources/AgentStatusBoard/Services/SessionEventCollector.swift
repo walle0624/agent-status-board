@@ -22,6 +22,12 @@ struct SessionEventCollector: TaskCollecting {
     /// Claude Code doesn't reliably fire the permission Notification (especially
     /// for MCP tools), so such a session would otherwise sit amber.
     let pendingApprovalAfter: TimeInterval
+    /// A "running" CC session whose latest transcript turn is a *completed*
+    /// assistant answer (nothing pending) and has been idle this long is treated
+    /// as finished. Goal / auto mode runs autonomously and often stops firing the
+    /// CC hooks, so the event record freezes at "running" forever — the
+    /// transcript, not the stale record, is the truth about whether it's done.
+    let idleAfter: TimeInterval
 
     init(
         dir: URL = FileManager.default.homeDirectoryForCurrentUser
@@ -29,13 +35,15 @@ struct SessionEventCollector: TaskCollecting {
         staleAfter: TimeInterval = 60 * 60 * 12,
         runningStaleAfter: TimeInterval = 60 * 15,
         keepCompletedAfter: TimeInterval = 60 * 60 * 24 * 14,
-        pendingApprovalAfter: TimeInterval = 90
+        pendingApprovalAfter: TimeInterval = 90,
+        idleAfter: TimeInterval = 60
     ) {
         self.dir = dir
         self.staleAfter = staleAfter
         self.runningStaleAfter = runningStaleAfter
         self.keepCompletedAfter = keepCompletedAfter
         self.pendingApprovalAfter = pendingApprovalAfter
+        self.idleAfter = idleAfter
     }
 
     func collect(now: Date) async -> [AgentTask] {
@@ -103,10 +111,10 @@ struct SessionEventCollector: TaskCollecting {
                 let d = Self.ccDetail(url)
                 liveTitle = d.title
                 if let real = d.lastReal { lastActivity = max(lastActivity, real) }
-                if status == .running, let p = d.pendingSince,
-                   now.timeIntervalSince(p) > pendingApprovalAfter {
-                    status = .waitingReview
-                }
+                status = Self.refinedStatus(
+                    status, pendingSince: d.pendingSince, idleSince: d.idleSince,
+                    now: now, pendingApprovalAfter: pendingApprovalAfter, idleAfter: idleAfter
+                )
             }
 
             // A running/thinking session with no recent REAL activity is not
@@ -119,14 +127,23 @@ struct SessionEventCollector: TaskCollecting {
 
             // Retention: keep finished work for keepCompletedAfter (recent ones
             // survive restarts / overnight); drop anything else past staleAfter.
-            let age = now.timeIntervalSince(record.updatedAt)
+            // Measure from lastActivity (transcript-derived for live CC), not the
+            // hook record's time, so a goal-mode session whose hooks froze isn't
+            // aged out while it's still active (and a finished one is dated by its
+            // real last turn, not a stale hook write).
+            let age = now.timeIntervalSince(lastActivity)
             if status == .done {
                 if age > keepCompletedAfter { continue }
             } else if age > staleAfter {
                 continue
             }
 
-            let title = names.name(forCwd: record.cwd)
+            // A session-id pin in names.json wins over everything (it's the only
+            // place a session's short human name may exist — CC stores none for
+            // un-renamed sessions, and one folder can host several sessions). Then
+            // a cwd pin, then the live custom/ai title, then the hook's fallback.
+            let title = names.name(forSessionId: rawId)
+                ?? names.name(forCwd: record.cwd)
                 ?? liveTitle
                 ?? (record.title.isEmpty ? "\(source.displayName) 会话" : record.title)
 
@@ -172,19 +189,21 @@ struct SessionEventCollector: TaskCollecting {
     }
 
     /// Reads the tail of a Claude Code transcript and extracts: the live title
-    /// (user-set custom-title preferred, else the auto ai-title), the timestamp
+    /// (user-set custom-title preferred, else the auto ai-title); the timestamp
     /// of the last REAL turn (user/assistant — not title-generation metadata, so
-    /// it reflects actual work), and, when the latest turn is an assistant
-    /// tool-use still awaiting its result, when that tool-use was emitted (a
-    /// "waiting on you / running a tool" signal).
-    private static func ccDetail(_ url: URL) -> (title: String?, lastReal: Date?, pendingSince: Date?) {
-        guard let handle = try? FileHandle(forReadingFrom: url) else { return (nil, nil, nil) }
+    /// it reflects actual work); when the latest turn is an assistant tool-use
+    /// still awaiting its result, when that tool-use was emitted (a "waiting on
+    /// you / running a tool" signal); and `idleSince` — set when the last
+    /// conversational turn is a *completed* assistant answer (Claude replied and
+    /// nothing is pending), i.e. the turn ended and the session is idle.
+    private static func ccDetail(_ url: URL) -> (title: String?, lastReal: Date?, pendingSince: Date?, idleSince: Date?) {
+        guard let handle = try? FileHandle(forReadingFrom: url) else { return (nil, nil, nil, nil) }
         defer { try? handle.close() }
         let size = (try? handle.seekToEnd()) ?? 0
         let window: UInt64 = 262_144
         let start = size > window ? size - window : 0
         guard (try? handle.seek(toOffset: start)) != nil,
-              let data = try? handle.readToEnd() else { return (nil, nil, nil) }
+              let data = try? handle.readToEnd() else { return (nil, nil, nil, nil) }
         var lines = data.split(separator: 0x0a, omittingEmptySubsequences: true)
         if start > 0, !lines.isEmpty { lines.removeFirst() }   // drop the partial first line
 
@@ -193,7 +212,7 @@ struct SessionEventCollector: TaskCollecting {
         func date(_ v: Any?) -> Date? { (v as? String).flatMap { isoF.date(from: $0) ?? iso.date(from: $0) } }
 
         var customTitle: String?; var aiTitle: String?
-        var lastReal: Date?; var pendingSince: Date?
+        var lastReal: Date?; var pendingSince: Date?; var lastWasAssistant = false
         for line in lines {
             guard let obj = (try? JSONSerialization.jsonObject(with: Data(line))) as? [String: Any],
                   let type = obj["type"] as? String else { continue }
@@ -207,11 +226,33 @@ struct SessionEventCollector: TaskCollecting {
                     .flatMap { $0["content"] as? [[String: Any]] }?
                     .contains { ($0["type"] as? String) == "tool_use" } ?? false
                 pendingSince = (type == "assistant" && hasToolUse) ? (ts ?? pendingSince) : nil
+                lastWasAssistant = (type == "assistant")
             default:
                 break
             }
         }
-        return (customTitle ?? aiTitle, lastReal, pendingSince)
+        // The turn has ended (session idle) when the last conversational entry is
+        // an assistant message with no tool-use awaiting a result — Claude gave
+        // its answer and is waiting. A trailing `user` entry (a fresh prompt or a
+        // tool_result) instead means Claude is about to work → not idle.
+        let idleSince = (lastWasAssistant && pendingSince == nil) ? lastReal : nil
+        return (customTitle ?? aiTitle, lastReal, pendingSince, idleSince)
+    }
+
+    /// Refines a CC session's hook-reported status using transcript signals.
+    /// Goal / auto mode runs autonomously and often stops firing the CC hooks, so
+    /// the event record freezes — the transcript decides the truth. Only a
+    /// `.running` record is refined: a tool-use pending past `pendingApprovalAfter`
+    /// ⇒ waiting on you (red); a finished turn (completed assistant answer) idle
+    /// past `idleAfter` ⇒ done. Anything else stays as reported.
+    static func refinedStatus(
+        _ status: AgentTaskStatus, pendingSince: Date?, idleSince: Date?, now: Date,
+        pendingApprovalAfter: TimeInterval, idleAfter: TimeInterval
+    ) -> AgentTaskStatus {
+        guard status == .running else { return status }
+        if let p = pendingSince, now.timeIntervalSince(p) > pendingApprovalAfter { return .waitingReview }
+        if let idle = idleSince, now.timeIntervalSince(idle) > idleAfter { return .done }
+        return status
     }
 
     /// UUIDs of Codex rollouts still under ~/.codex/sessions/, mapped to the

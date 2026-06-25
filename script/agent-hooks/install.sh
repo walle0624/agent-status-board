@@ -7,10 +7,12 @@ SRC_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 BIN_DIR="$HOME/.agent-status-board/bin"
 mkdir -p "$BIN_DIR" "$HOME/.agent-status-board/sessions"
 
-# Seed an editable display-name map: { "<project path>": "<name to show>" }.
-# A session at or under a mapped path shows that name instead of the folder name.
+# Seed an editable display-name map: { "<key>": "<name to show>" }.
+# A key that looks like a path matches any session at/under it; any other key
+# (e.g. a session UUID) names that one session exactly (and wins over a path).
+# Use a session-id key when one folder hosts several differently-named sessions.
 NAMES="$HOME/.agent-status-board/names.json"
-[ -f "$NAMES" ] || printf '{\n  "/Users/example/path/to/project": "My Session Name"\n}\n' > "$NAMES"
+[ -f "$NAMES" ] || printf '{\n  "/Users/example/path/to/project": "My Session Name",\n  "00000000-0000-0000-0000-000000000000": "Exact Session Name"\n}\n' > "$NAMES"
 
 # 1) install scripts to a stable location — only when content changed, so
 #    re-running install doesn't needlessly churn files.

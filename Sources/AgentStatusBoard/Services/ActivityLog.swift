@@ -36,7 +36,15 @@ struct ActivityLog: Sendable {
                   let status = AgentTaskStatus(rawValue: raw.status) else {
                 continue
             }
-            let title = names.name(forCwd: raw.cwd)
+            // key is "<source>-<id>"; recover the raw id so a session-id pin in
+            // names.json (highest priority) can name this entry — same rule as
+            // SessionEventCollector.
+            let prefix = raw.source + "-"
+            let rawId = (raw.key ?? "").hasPrefix(prefix)
+                ? String((raw.key ?? "").dropFirst(prefix.count))
+                : (raw.key ?? "")
+            let title = names.name(forSessionId: rawId)
+                ?? names.name(forCwd: raw.cwd)
                 ?? (raw.title.isEmpty ? status.displayName : raw.title)
             entries.append(
                 ActivityEntry(
