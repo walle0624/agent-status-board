@@ -1,4 +1,5 @@
 import Foundation
+import os
 
 /// One rate-limit window (e.g. the 5-hour or weekly bucket).
 struct UsageWindow: Equatable, Sendable {
@@ -25,6 +26,8 @@ struct ProviderUsage: Equatable, Sendable {
 /// `resets_at`, plus `plan_type`. Claude Code keeps no equivalent local data.
 struct UsageCollector: Sendable {
     let sessionsDir: URL
+
+    static let log = Logger(subsystem: Bundle.main.bundleIdentifier ?? "AgentStatusBoard", category: "usage")
 
     init(sessionsDir: URL = FileManager.default.homeDirectoryForCurrentUser
         .appendingPathComponent(".codex/sessions")) {
@@ -175,7 +178,9 @@ struct UsageCollector: Sendable {
     /// only updates when Codex runs. Returns nil on any failure (caller then
     /// falls back to the local snapshot).
     func codexUsageLive() async -> ProviderUsage? {
-        guard let (token, account) = codexAuth() else { return nil }
+        guard let (token, account) = codexAuth() else {
+            Self.log.error("codex live: no auth token"); return nil
+        }
         var req = URLRequest(url: URL(string: "https://chatgpt.com/backend-api/wham/usage")!)
         req.timeoutInterval = 15
         req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
@@ -183,8 +188,15 @@ struct UsageCollector: Sendable {
         req.setValue("codex_cli_rs", forHTTPHeaderField: "User-Agent")
 
         guard let (data, resp) = try? await URLSession.shared.data(for: req),
-              let http = resp as? HTTPURLResponse, http.statusCode == 200,
-              let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return nil }
+              let http = resp as? HTTPURLResponse else {
+            Self.log.error("codex live: request failed (network/proxy)"); return nil
+        }
+        guard http.statusCode == 200 else {
+            Self.log.error("codex live: HTTP \(http.statusCode, privacy: .public)"); return nil
+        }
+        guard let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+            Self.log.error("codex live: bad JSON body"); return nil
+        }
 
         let rl = obj["rate_limit"] as? [String: Any]
         func window(_ key: String) -> UsageWindow? {
@@ -197,7 +209,8 @@ struct UsageCollector: Sendable {
         }
         let short = window("primary_window")
         let long = window("secondary_window")
-        guard short != nil || long != nil else { return nil }
+        guard short != nil || long != nil else { Self.log.error("codex live: no windows parsed"); return nil }
+        Self.log.info("codex live OK: 5h used \(Int(short?.usedPercent ?? -1), privacy: .public)%, weekly used \(Int(long?.usedPercent ?? -1), privacy: .public)%")
         return ProviderUsage(source: .codex, plan: obj["plan_type"] as? String,
                              short: short, long: long, snapshotAt: Date())
     }

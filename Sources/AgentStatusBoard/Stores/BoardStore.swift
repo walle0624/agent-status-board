@@ -104,11 +104,21 @@ final class BoardStore: ObservableObject {
             lastUsageAt = now
             let collector = usageCollector
             Task.detached(priority: .utility) { [weak self] in
-                // Prefer Codex's live usage endpoint; fall back to the local
-                // rollout snapshot if it fails (token expired / offline). Keep
-                // the last good value if both find nothing, so it doesn't blink.
-                let usage = await collector.codexUsageLive() ?? collector.codexUsage()
-                await MainActor.run { if let usage { self?.codexUsage = usage } }
+                // Prefer Codex's live usage endpoint. On a transient failure do
+                // NOT downgrade to the local rollout snapshot — it reports a
+                // different (lower) number than the live limit, so swapping to it
+                // made the board flicker to a wrong value. Keep the last good live
+                // value instead; only use the snapshot before we ever have one
+                // (first load / offline at startup).
+                if let live = await collector.codexUsageLive() {
+                    await MainActor.run { self?.codexUsage = live }
+                    return
+                }
+                let hasValue = await MainActor.run { self?.codexUsage != nil }
+                if !hasValue, let snap = collector.codexUsage() {
+                    UsageCollector.log.info("codex usage: live unavailable, showing local snapshot")
+                    await MainActor.run { self?.codexUsage = snap }
+                }
             }
         }
         // CC usage costs a tiny inference ping, so poll it much less often and
