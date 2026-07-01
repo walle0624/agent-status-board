@@ -6,6 +6,9 @@ Agent Status Board —— macOS 桌面悬浮组件 + 菜单栏指示灯，实时
 
 ---
 
+## v1.23
+- **修复:hook 脚本里写死了作者本机路径,导致其他机器上 Codex 回合结束(turn-end)通知失效、安装/卸载出错**(感谢 @xuzhiqiang0723 提交的 PR)。`codex-notify.sh` / `install.sh` / `uninstall.sh` 原来硬编码了 `/Users/walle/.codex/computer-use/…` 这样的本机路径。现在:①去掉硬编码,改用 `$HOME`;②安装时如果你已经配了 Codex `notify`,会先把原配置存下来再换成状态板包装器——包装器每次先转发到你原来的 notify、再记录状态板的 turn-ended(以前只要你已有 notify,状态板就不接入,导致回合结束信号丢失);③卸载时还原你原来的 notify,并按标记块干净移除状态板加的 hooks。
+
 ## v1.22
 - **新增:自动隐藏定时任务(自动化 / cron 触发的 Codex 会话)**。像"每日同步""每日备份"这类由定时器(launchd / cron)在固定时间自动跑的 Codex 任务,会挤占看板的"最近完成"、也不是你要盯的活。现在看板**自动识别并隐藏**它们:Codex 在 rollout 的 `session_meta` 里用 `thread_source: "automation"` 标记非交互(`codex exec` / 自动化)启动的会话,看板据此过滤,只保留你真正在终端里交互跑的会话。无需任何配置。
 
