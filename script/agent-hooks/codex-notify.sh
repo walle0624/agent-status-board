@@ -10,9 +10,30 @@ DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REC="$DIR/record.sh"
 
 # --- 1) passthrough to the original notify program (preserve existing behavior) ---
-ORIG="/Users/walle/.codex/computer-use/Codex Computer Use.app/Contents/SharedSupport/SkyComputerUseClient.app/Contents/MacOS/SkyComputerUseClient"
-if [ -x "$ORIG" ]; then
-  "$ORIG" "turn-ended" "$@" >/dev/null 2>&1 || true
+ORIG_JSON="$HOME/.agent-status-board/codex-notify-original.json"
+orig_args=()
+if [ -f "$ORIG_JSON" ]; then
+  while IFS= read -r arg; do
+    orig_args+=("$arg")
+  done < <(python3 - "$ORIG_JSON" <<'PY' 2>/dev/null || true
+import json, sys
+try:
+    data = json.load(open(sys.argv[1]))
+except Exception:
+    data = []
+if isinstance(data, list):
+    for item in data:
+        print(str(item))
+PY
+)
+fi
+
+if [ "${#orig_args[@]}" -eq 0 ]; then
+  orig_args=("$HOME/.codex/computer-use/Codex Computer Use.app/Contents/SharedSupport/SkyComputerUseClient.app/Contents/MacOS/SkyComputerUseClient" "turn-ended")
+fi
+
+if [ -x "${orig_args[0]}" ]; then
+  "${orig_args[@]}" "$@" >/dev/null 2>&1 || true
 fi
 
 # --- 2) record state ---
