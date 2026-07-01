@@ -91,7 +91,14 @@ struct SessionEventCollector: TaskCollecting {
             case .claudeCode:
                 if !liveCC.isEmpty, rawId.isEmpty || liveCC[rawId] == nil { continue }
             case .codex:
-                if !liveCodex.isEmpty, rawId.isEmpty || liveCodex[rawId] == nil { continue }
+                if !liveCodex.isEmpty {
+                    // Hide a Codex session that's archived (rollout gone) or an
+                    // automation run — a scheduled / cron `codex exec` job whose
+                    // session_meta.thread_source == "automation" (daily
+                    // backups/syncs). The user doesn't want those on the board.
+                    guard !rawId.isEmpty, let url = liveCodex[rawId] else { continue }
+                    if Self.codexIsAutomation(url) { continue }
+                }
             default:
                 break
             }
@@ -255,27 +262,45 @@ struct SessionEventCollector: TaskCollecting {
         return status
     }
 
-    /// UUIDs of Codex rollouts still under ~/.codex/sessions/, mapped to the
-    /// rollout's last-write time. Archiving moves the rollout to
-    /// ~/.codex/archived_sessions/, so it drops out.
-    private static func liveCodexRollouts() -> [String: Date] {
+    /// Rollout URLs of Codex sessions still under ~/.codex/sessions/, keyed by
+    /// the trailing UUID. Archiving moves the rollout to
+    /// ~/.codex/archived_sessions/, so it drops out (session hidden). The URL
+    /// also lets us read the rollout's session_meta (e.g. thread_source).
+    private static func liveCodexRollouts() -> [String: URL] {
         let base = FileManager.default.homeDirectoryForCurrentUser
             .appendingPathComponent(".codex/sessions")
         guard let en = FileManager.default.enumerator(
-            at: base, includingPropertiesForKeys: [.contentModificationDateKey], options: [.skipsHiddenFiles]
+            at: base, includingPropertiesForKeys: nil, options: [.skipsHiddenFiles]
         ) else { return [:] }
-        var ids: [String: Date] = [:]
+        var ids: [String: URL] = [:]
         for case let url as URL in en {
             let name = url.lastPathComponent
             guard name.hasPrefix("rollout-"), name.hasSuffix(".jsonl") else { continue }
             let stem = name.dropLast(6)                 // strip ".jsonl"
             guard stem.count >= 36 else { continue }
-            let id = String(stem.suffix(36))            // trailing uuid
-            let m = (try? url.resourceValues(forKeys: [.contentModificationDateKey]))?
-                .contentModificationDate ?? .distantPast
-            ids[id] = m
+            ids[String(stem.suffix(36))] = url          // trailing uuid → rollout
         }
         return ids
+    }
+
+    /// Whether a Codex rollout was started by automation (a scheduled / cron
+    /// `codex exec` run) rather than interactively. Codex records this in the
+    /// first-line session_meta as `thread_source: "automation"`, written before
+    /// the large base_instructions blob, so a bounded head read finds it. Such
+    /// sessions (daily backups/syncs) are hidden from the board.
+    static func codexIsAutomation(_ url: URL) -> Bool {
+        guard let h = try? FileHandle(forReadingFrom: url) else { return false }
+        defer { try? h.close() }
+        guard let data = try? h.read(upToCount: 65_536) else { return false }
+        return isAutomationMeta(String(decoding: data, as: UTF8.self))
+    }
+
+    /// True when a rollout head declares `thread_source: "automation"`. Anchored
+    /// to the key so the word appearing elsewhere (e.g. base_instructions) can't
+    /// trigger a false positive.
+    static func isAutomationMeta(_ head: String) -> Bool {
+        head.range(of: "\"thread_source\"\\s*:\\s*\"automation\"",
+                   options: .regularExpression) != nil
     }
 
     private static func summary(for status: AgentTaskStatus) -> String {

@@ -121,6 +121,18 @@ private func sessionNames(_ map: [String: String]) throws -> SessionNames {
     #expect(refine(.thinking, idle: old) == .thinking)
 }
 
+@Test func detectsAutomationCodexSessions() {
+    // Scheduled / cron `codex exec` runs carry thread_source == "automation".
+    #expect(SessionEventCollector.isAutomationMeta(#"{"payload":{"cwd":"/x","thread_source":"automation","model_provider":"openai"}}"#))
+    #expect(SessionEventCollector.isAutomationMeta(#""thread_source": "automation""#))   // pretty-printed spacing
+    // Interactive sessions are not hidden.
+    #expect(!SessionEventCollector.isAutomationMeta(#"{"thread_source":"user"}"#))
+    #expect(!SessionEventCollector.isAutomationMeta(#"{"thread_source":"vscode"}"#))
+    // The word appearing in free text (e.g. base_instructions) must not trigger it.
+    #expect(!SessionEventCollector.isAutomationMeta(#"{"base_instructions":{"text":"you may run automation tasks"},"thread_source":"user"}"#))
+    #expect(!SessionEventCollector.isAutomationMeta("{}"))
+}
+
 @Test func updateVersionCompare() {
     #expect(UpdateChecker.isNewer("1.12", than: "1.11"))
     #expect(UpdateChecker.isNewer("1.11", than: "1.2"))   // numeric, not lexical
