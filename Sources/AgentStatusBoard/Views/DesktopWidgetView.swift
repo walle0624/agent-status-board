@@ -53,7 +53,6 @@ struct DesktopWidgetView: View {
     var inPopover: Bool = false
     @State private var appeared = false
     @State private var updating = false
-    @State private var recentDoneExpanded = false   // 忙时"最近完成"收起，点开才展开
 
     private var snapshot: AgentSnapshot { store.snapshot }
     private var attention: [AgentTask] {
@@ -62,22 +61,30 @@ struct DesktopWidgetView: View {
     private var running: [AgentTask] {
         snapshot.visibleTasks.filter { $0.status == .running || $0.status == .thinking }
     }
-    /// Busy = something is active (running or needs you). Drives the adaptive
-    /// "最近完成": collapsed while busy (running work is the focus), auto-expanded
-    /// when idle (the morning "what did I leave running last night" list).
-    private var busy: Bool { !attention.isEmpty || !running.isEmpty }
-    /// The most-recent completed sessions, newest first and de-duplicated by
-    /// session (one row per session, its latest finish). Kept across restarts
-    /// and overnight so you can see — and click back into — what you last
-    /// worked on. Capped to a handful to stay glanceable.
+    /// The system is "idle" once nothing has happened for an hour. Running tasks
+    /// keep their activity timestamp fresh (and the collector drops silent ones),
+    /// so an hour of no activity also means nothing is running. Idle → the board
+    /// shows the last-5 "recently done" resume list; active → it shows only this
+    /// burst's completions instead (see `recentDone`).
+    private var systemIdle: Bool {
+        guard let last = snapshot.visibleTasks.map(\.lastActivityAt).max() else { return true }
+        return Date().timeIntervalSince(last) >= 3600
+    }
+    /// What finished, adapted to the moment — never a fixed count parked forever:
+    ///  • idle ≥1h → the last 5 completed sessions (the "pick up where I left
+    ///    off" resume list);
+    ///  • active   → only sessions that finished within the last hour (this
+    ///    working burst), which age out on their own as time passes.
+    /// Newest first, de-duplicated by session (one row per session).
     private var recentDone: [AgentTask] {
         var seen = Set<String>()
-        return snapshot.visibleTasks
+        let done = snapshot.visibleTasks
             .filter { $0.status == .done }
             .sorted { $0.lastActivityAt > $1.lastActivityAt }
             .filter { seen.insert($0.sessionId ?? $0.id).inserted }
-            .prefix(5)
-            .map { $0 }
+        if systemIdle { return Array(done.prefix(5)) }
+        let cutoff = Date().addingTimeInterval(-3600)
+        return done.filter { $0.lastActivityAt >= cutoff }
     }
 
     var body: some View {
@@ -93,8 +100,7 @@ struct DesktopWidgetView: View {
                 runningBlock                           // amber hero: work in progress
             }
             if !recentDone.isEmpty {
-                // 忙时（有在跑 / 待处理）收成一行、点开才展开；闲时自动铺开当恢复清单。
-                recentDoneBlock(expanded: !busy || recentDoneExpanded, canToggle: busy)
+                recentDoneBlock   // active → this burst's completions；idle ≥1h → last-5 resume list
             }
             if attention.isEmpty && running.isEmpty && recentDone.isEmpty {
                 calmState                              // truly idle
@@ -369,33 +375,17 @@ struct DesktopWidgetView: View {
 
     // MARK: recently completed (kept across days)
 
-    /// "最近完成" — the last few finished sessions, deduped and kept across days
-    /// so you can pick up yesterday's work. Each row is clickable to reopen its
-    /// session right where you left off.
-    private func recentDoneBlock(expanded: Bool, canToggle: Bool) -> some View {
+    /// Finished sessions. `recentDone` adapts the content (active → this burst's
+    /// completions; idle ≥1h → the last-5 resume list); the header stays
+    /// "最近完成", and each row's timestamp shows how recent it is. Rows are
+    /// clickable to reopen the session.
+    private var recentDoneBlock: some View {
         VStack(alignment: .leading, spacing: 5) {
             Divider().overlay(Glass.hairline)
-            Button {
-                if canToggle { withAnimation(.easeOut(duration: 0.18)) { recentDoneExpanded.toggle() } }
-            } label: {
-                HStack(spacing: 5) {
-                    Text("最近完成 · \(recentDone.count)")
-                        .font(.system(size: 11)).foregroundStyle(Glass.textTertiary)
-                    if canToggle {
-                        Image(systemName: expanded ? "chevron.down" : "chevron.right")
-                            .font(.system(size: 8, weight: .semibold))
-                            .foregroundStyle(Glass.textTertiary)
-                    }
-                    Spacer(minLength: 0)
-                }
-                .contentShape(Rectangle())
-            }
-            .buttonStyle(.plain)
-            .disabled(!canToggle)
-            if expanded {
-                ForEach(recentDone) { task in
-                    sessionRow(task, color: Glass.green, detail: doneDetail(task), detailLines: 1)
-                }
+            Text("最近完成 · \(recentDone.count)")
+                .font(.system(size: 11)).foregroundStyle(Glass.textTertiary)
+            ForEach(recentDone) { task in
+                sessionRow(task, color: Glass.green, detail: doneDetail(task), detailLines: 1)
             }
         }
     }
