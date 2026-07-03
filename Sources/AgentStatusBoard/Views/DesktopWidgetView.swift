@@ -53,6 +53,7 @@ struct DesktopWidgetView: View {
     var inPopover: Bool = false
     @State private var appeared = false
     @State private var updating = false
+    @State private var recentDoneExpanded = false   // 忙时"最近完成"收起，点开才展开
 
     private var snapshot: AgentSnapshot { store.snapshot }
     private var attention: [AgentTask] {
@@ -61,6 +62,10 @@ struct DesktopWidgetView: View {
     private var running: [AgentTask] {
         snapshot.visibleTasks.filter { $0.status == .running || $0.status == .thinking }
     }
+    /// Busy = something is active (running or needs you). Drives the adaptive
+    /// "最近完成": collapsed while busy (running work is the focus), auto-expanded
+    /// when idle (the morning "what did I leave running last night" list).
+    private var busy: Bool { !attention.isEmpty || !running.isEmpty }
     /// The most-recent completed sessions, newest first and de-duplicated by
     /// session (one row per session, its latest finish). Kept across restarts
     /// and overnight so you can see — and click back into — what you last
@@ -88,7 +93,8 @@ struct DesktopWidgetView: View {
                 runningBlock                           // amber hero: work in progress
             }
             if !recentDone.isEmpty {
-                recentDoneBlock                        // 最近完成（跨天保留，可点击回去继续）
+                // 忙时（有在跑 / 待处理）收成一行、点开才展开；闲时自动铺开当恢复清单。
+                recentDoneBlock(expanded: !busy || recentDoneExpanded, canToggle: busy)
             }
             if attention.isEmpty && running.isEmpty && recentDone.isEmpty {
                 calmState                              // truly idle
@@ -248,7 +254,7 @@ struct DesktopWidgetView: View {
                     .font(.system(size: 12))
                     .foregroundStyle(Glass.textSecondary)
             }
-            ForEach(attention.prefix(4)) { task in
+            ForEach(attention) { task in
                 sessionRow(task, color: Glass.red, detail: reason(for: task), detailLines: 2)
             }
         }
@@ -314,7 +320,7 @@ struct DesktopWidgetView: View {
                     .font(.system(size: 12))
                     .foregroundStyle(Glass.textSecondary)
             }
-            ForEach(running.prefix(4)) { task in
+            ForEach(running) { task in
                 sessionRow(task, color: Glass.amber, detail: runningDetail(task), detailLines: 1)
             }
         }
@@ -327,7 +333,7 @@ struct DesktopWidgetView: View {
             Divider().overlay(Glass.hairline)
             Text("正在执行 · \(running.count)")
                 .font(.system(size: 11)).foregroundStyle(Glass.textTertiary)
-            ForEach(running.prefix(4)) { task in
+            ForEach(running) { task in
                 sessionRow(task, color: Glass.amber, detail: runningDetail(task), detailLines: 1)
             }
         }
@@ -366,13 +372,30 @@ struct DesktopWidgetView: View {
     /// "最近完成" — the last few finished sessions, deduped and kept across days
     /// so you can pick up yesterday's work. Each row is clickable to reopen its
     /// session right where you left off.
-    private var recentDoneBlock: some View {
+    private func recentDoneBlock(expanded: Bool, canToggle: Bool) -> some View {
         VStack(alignment: .leading, spacing: 5) {
             Divider().overlay(Glass.hairline)
-            Text("最近完成 · \(recentDone.count)")
-                .font(.system(size: 11)).foregroundStyle(Glass.textTertiary)
-            ForEach(recentDone) { task in
-                sessionRow(task, color: Glass.green, detail: doneDetail(task), detailLines: 1)
+            Button {
+                if canToggle { withAnimation(.easeOut(duration: 0.18)) { recentDoneExpanded.toggle() } }
+            } label: {
+                HStack(spacing: 5) {
+                    Text("最近完成 · \(recentDone.count)")
+                        .font(.system(size: 11)).foregroundStyle(Glass.textTertiary)
+                    if canToggle {
+                        Image(systemName: expanded ? "chevron.down" : "chevron.right")
+                            .font(.system(size: 8, weight: .semibold))
+                            .foregroundStyle(Glass.textTertiary)
+                    }
+                    Spacer(minLength: 0)
+                }
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .disabled(!canToggle)
+            if expanded {
+                ForEach(recentDone) { task in
+                    sessionRow(task, color: Glass.green, detail: doneDetail(task), detailLines: 1)
+                }
             }
         }
     }
