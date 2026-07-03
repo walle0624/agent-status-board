@@ -2,3 +2,8 @@
 dist/
 .DS_Store
 *.xcuserstate
+
+# Local AI working-memory, auto-maintained by AI sessions — not a shared repo
+# artifact. Was published once by accident; keep it local. (Delete this line and
+# `git add -f` if you ever decide to share it in the repo per its own template.)
+PROJECT_MEMORY.md
