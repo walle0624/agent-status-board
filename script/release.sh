@@ -16,11 +16,19 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT_DIR"
 
-DRY=0; ARG=""
+DRY=0; ARG=""; ALLOW_UNTRACKED=0
 for a in "$@"; do
-  case "$a" in --dry-run|-n) DRY=1 ;; *) ARG="$a" ;; esac
+  case "$a" in
+    --dry-run|-n) DRY=1 ;;
+    --allow-untracked|--yes) ALLOW_UNTRACKED=1 ;;
+    *) ARG="$a" ;;
+  esac
 done
 [ -n "$ARG" ] || ARG="next"
+
+# `git add -A` below would sweep in ANY untracked file — surface them so a stray
+# file (another session's scratch, a scaffold, a secret) never ships by accident.
+UNTRACKED="$(git ls-files --others --exclude-standard)"
 
 CUR="$(tr -d '[:space:]' < VERSION 2>/dev/null || echo 0.0)"
 case "$ARG" in
@@ -49,7 +57,17 @@ if git rev-parse "$TAG" >/dev/null 2>&1; then
   [ "$DRY" = 1 ] && { echo "(注：tag $TAG 已存在，正式发版会被拒)"; exit 0; }
   echo "✗ tag $TAG 已存在，换个版本号"; exit 1
 fi
-[ "$DRY" = 1 ] && { echo "(--dry-run：未做任何改动)"; exit 0; }
+if [ "$DRY" = 1 ]; then
+  [ -n "$UNTRACKED" ] && { echo "⚠ 未跟踪文件（正式发版会被 git add -A 一并提交，请核对）："; printf '%s\n' "$UNTRACKED" | sed 's/^/    /'; }
+  echo "(--dry-run：未做任何改动)"; exit 0
+fi
+# Guard: refuse to sweep unexpected untracked files into a public release.
+if [ -n "$UNTRACKED" ] && [ "$ALLOW_UNTRACKED" != 1 ]; then
+  echo "✗ 有未跟踪文件，git add -A 会把它们一并提交进发布：" >&2
+  printf '%s\n' "$UNTRACKED" | sed 's/^/    /' >&2
+  echo "  先处理（git add / 删除 / 写进 .gitignore），或核对无误后加 --allow-untracked 重跑。" >&2
+  exit 1
+fi
 
 printf '%s\n' "$NEW" > VERSION
 git add -A
