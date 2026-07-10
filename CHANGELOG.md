@@ -6,6 +6,13 @@ Agent Status Board —— macOS 桌面悬浮组件 + 菜单栏指示灯，实时
 
 ---
 
+## v1.26
+- **修复:Codex 多-agent 派生的子会话不再挤上看板,只保留主会话**。Codex 更新后,主规划会派生出多个
+  子 agent(sub-agent),每个子会话也会触发 hook、冒到看板上,一下子多出一堆。现在按 rollout 的
+  `session_meta.thread_source` 过滤:`"user"` = 你的主会话(显示),`"subagent"` = 主规划派生的子
+  agent(隐藏——它带 `parent_thread_id` / `agent_nickname` / `multi_agent_version`),`"automation"`
+  = 定时任务(隐藏,承接 v1.22)。只显示你真正在跟的主会话;认不出 thread_source 的老会话仍照常显示。
+
 ## v1.25
 - **改进:"最近完成"不再固定摆 5 个,改成随场景自适应**。之前不管你忙不忙,底部都固定挂着历史
   最近完成的 5 个(常混着几小时 / 几天前的老任务)。现在按"系统是否静默"切换:**近 1 小时内有任务

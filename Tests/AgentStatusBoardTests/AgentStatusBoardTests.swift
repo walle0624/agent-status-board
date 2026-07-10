@@ -121,16 +121,18 @@ private func sessionNames(_ map: [String: String]) throws -> SessionNames {
     #expect(refine(.thinking, idle: old) == .thinking)
 }
 
-@Test func detectsAutomationCodexSessions() {
-    // Scheduled / cron `codex exec` runs carry thread_source == "automation".
-    #expect(SessionEventCollector.isAutomationMeta(#"{"payload":{"cwd":"/x","thread_source":"automation","model_provider":"openai"}}"#))
-    #expect(SessionEventCollector.isAutomationMeta(#""thread_source": "automation""#))   // pretty-printed spacing
-    // Interactive sessions are not hidden.
-    #expect(!SessionEventCollector.isAutomationMeta(#"{"thread_source":"user"}"#))
-    #expect(!SessionEventCollector.isAutomationMeta(#"{"thread_source":"vscode"}"#))
-    // The word appearing in free text (e.g. base_instructions) must not trigger it.
-    #expect(!SessionEventCollector.isAutomationMeta(#"{"base_instructions":{"text":"you may run automation tasks"},"thread_source":"user"}"#))
-    #expect(!SessionEventCollector.isAutomationMeta("{}"))
+@Test func hidesBackgroundCodexSessions() {
+    // Hidden: scheduled automation runs AND sub-agents spawned by the main planner.
+    #expect(SessionEventCollector.isHiddenThreadMeta(#"{"payload":{"cwd":"/x","thread_source":"automation","model_provider":"openai"}}"#))
+    #expect(SessionEventCollector.isHiddenThreadMeta(#""thread_source": "automation""#))   // pretty-printed spacing
+    #expect(SessionEventCollector.isHiddenThreadMeta(#"{"thread_source":"subagent","parent_thread_id":"019f498c","agent_nickname":"Pascal"}"#))
+    // Shown: the user's main interactive session, and older rollouts with no /
+    // unknown thread_source (fail-open, so we never hide real work).
+    #expect(!SessionEventCollector.isHiddenThreadMeta(#"{"thread_source":"user"}"#))
+    #expect(!SessionEventCollector.isHiddenThreadMeta(#"{"thread_source":"vscode"}"#))
+    #expect(!SessionEventCollector.isHiddenThreadMeta("{}"))
+    // Those words appearing in free text (e.g. base_instructions) must not trigger it.
+    #expect(!SessionEventCollector.isHiddenThreadMeta(#"{"base_instructions":{"text":"spawn a subagent for automation"},"thread_source":"user"}"#))
 }
 
 @Test func updateVersionCompare() {

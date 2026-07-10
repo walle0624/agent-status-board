@@ -92,12 +92,12 @@ struct SessionEventCollector: TaskCollecting {
                 if !liveCC.isEmpty, rawId.isEmpty || liveCC[rawId] == nil { continue }
             case .codex:
                 if !liveCodex.isEmpty {
-                    // Hide a Codex session that's archived (rollout gone) or an
-                    // automation run — a scheduled / cron `codex exec` job whose
-                    // session_meta.thread_source == "automation" (daily
-                    // backups/syncs). The user doesn't want those on the board.
+                    // Hide a Codex session that's archived (rollout gone) or is a
+                    // background/derived thread: a scheduled automation run, or a
+                    // sub-agent spawned by the main planner (multi-agent). Only the
+                    // user's main interactive session shows.
                     guard !rawId.isEmpty, let url = liveCodex[rawId] else { continue }
-                    if Self.codexIsAutomation(url) { continue }
+                    if Self.codexIsHidden(url) { continue }
                 }
             default:
                 break
@@ -283,23 +283,30 @@ struct SessionEventCollector: TaskCollecting {
         return ids
     }
 
-    /// Whether a Codex rollout was started by automation (a scheduled / cron
-    /// `codex exec` run) rather than interactively. Codex records this in the
-    /// first-line session_meta as `thread_source: "automation"`, written before
-    /// the large base_instructions blob, so a bounded head read finds it. Such
-    /// sessions (daily backups/syncs) are hidden from the board.
-    static func codexIsAutomation(_ url: URL) -> Bool {
+    /// Whether a Codex rollout is a background / derived thread the user doesn't
+    /// want on the board — i.e. NOT their main interactive session. Codex records
+    /// the kind in the first-line session_meta as `thread_source`:
+    ///   • `"user"`       → the main session (the planner) — shown;
+    ///   • `"automation"` → a scheduled / cron `codex exec` run (backups/syncs);
+    ///   • `"subagent"`   → a child spawned by the main planner (multi-agent —
+    ///     carries `parent_thread_id`, `agent_nickname`, `multi_agent_version`).
+    /// The field sits before the large base_instructions blob, so a bounded head
+    /// read finds it. Automation and subagent threads are hidden; only the main
+    /// (`user`) session — or an older rollout with no/unknown thread_source —
+    /// shows.
+    static func codexIsHidden(_ url: URL) -> Bool {
         guard let h = try? FileHandle(forReadingFrom: url) else { return false }
         defer { try? h.close() }
         guard let data = try? h.read(upToCount: 65_536) else { return false }
-        return isAutomationMeta(String(decoding: data, as: UTF8.self))
+        return isHiddenThreadMeta(String(decoding: data, as: UTF8.self))
     }
 
-    /// True when a rollout head declares `thread_source: "automation"`. Anchored
-    /// to the key so the word appearing elsewhere (e.g. base_instructions) can't
-    /// trigger a false positive.
-    static func isAutomationMeta(_ head: String) -> Bool {
-        head.range(of: "\"thread_source\"\\s*:\\s*\"automation\"",
+    /// True when a rollout head declares `thread_source` of a hidden kind
+    /// (`automation` or `subagent`). Anchored to the key so those words appearing
+    /// elsewhere (e.g. base_instructions) can't trigger a false positive; an
+    /// unknown / missing thread_source (older Codex) counts as shown.
+    static func isHiddenThreadMeta(_ head: String) -> Bool {
+        head.range(of: "\"thread_source\"\\s*:\\s*\"(automation|subagent)\"",
                    options: .regularExpression) != nil
     }
 
