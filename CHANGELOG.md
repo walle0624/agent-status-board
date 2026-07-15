@@ -6,6 +6,12 @@ Agent Status Board —— macOS 桌面悬浮组件 + 菜单栏指示灯，实时
 
 ---
 
+## v1.27
+- **修复:Claude Code 通过 codex CLI 起的无标题 Codex 会话不再显示**。用 CC 驱动 `codex exec` 跑任务
+  时,每个 exec 会话也会冒到看板上(而且是无标题的"Codex 会话")。这类 headless 会话在 rollout 的
+  `session_meta` 里 `originator = "codex_exec"`(交互桌面会话是 `"Codex Desktop"`),据此隐藏。你只会
+  看到在管理它们的主会话,不会被这些程序化起的子会话刷屏。(承接 v1.26 的子 agent、v1.22 的定时任务过滤)
+
 ## v1.26
 - **修复:Codex 多-agent 派生的子会话不再挤上看板,只保留主会话**。Codex 更新后,主规划会派生出多个
   子 agent(sub-agent),每个子会话也会触发 hook、冒到看板上,一下子多出一堆。现在按 rollout 的

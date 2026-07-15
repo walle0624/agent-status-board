@@ -283,17 +283,17 @@ struct SessionEventCollector: TaskCollecting {
         return ids
     }
 
-    /// Whether a Codex rollout is a background / derived thread the user doesn't
-    /// want on the board — i.e. NOT their main interactive session. Codex records
-    /// the kind in the first-line session_meta as `thread_source`:
-    ///   • `"user"`       → the main session (the planner) — shown;
-    ///   • `"automation"` → a scheduled / cron `codex exec` run (backups/syncs);
-    ///   • `"subagent"`   → a child spawned by the main planner (multi-agent —
-    ///     carries `parent_thread_id`, `agent_nickname`, `multi_agent_version`).
-    /// The field sits before the large base_instructions blob, so a bounded head
-    /// read finds it. Automation and subagent threads are hidden; only the main
-    /// (`user`) session — or an older rollout with no/unknown thread_source —
-    /// shows.
+    /// Whether a Codex rollout is a background / derived session the user doesn't
+    /// want on the board — i.e. NOT an interactive session they're working in.
+    /// Read from the first-line session_meta:
+    ///   • interactive (`originator "Codex Desktop"`, `thread_source "user"`) → shown;
+    ///   • `thread_source "automation"` → scheduled / cron `codex exec` — hidden;
+    ///   • `thread_source "subagent"`   → a child spawned by the main planner
+    ///     (multi-agent: `parent_thread_id`, `agent_nickname`, …) — hidden;
+    ///   • `originator "codex_exec"` (`source "exec"`) → a headless `codex exec`
+    ///     run, e.g. Claude Code driving the codex CLI (untitled) — hidden.
+    /// These fields sit before the large base_instructions blob, so a bounded
+    /// head read finds them. Unknown / older rollouts fail open (shown).
     static func codexIsHidden(_ url: URL) -> Bool {
         guard let h = try? FileHandle(forReadingFrom: url) else { return false }
         defer { try? h.close() }
@@ -301,13 +301,18 @@ struct SessionEventCollector: TaskCollecting {
         return isHiddenThreadMeta(String(decoding: data, as: UTF8.self))
     }
 
-    /// True when a rollout head declares `thread_source` of a hidden kind
-    /// (`automation` or `subagent`). Anchored to the key so those words appearing
-    /// elsewhere (e.g. base_instructions) can't trigger a false positive; an
-    /// unknown / missing thread_source (older Codex) counts as shown.
+    /// True when a rollout head marks a session as background / derived, so it's
+    /// hidden: `thread_source` of `automation` (scheduled cron) or `subagent`
+    /// (spawned child), OR `originator` of `codex_exec` (a headless `codex exec`
+    /// run — e.g. Claude Code driving the codex CLI; these are untitled). Anchored
+    /// to the keys so the words appearing in free text (e.g. base_instructions)
+    /// can't false-trigger; an interactive session (`Codex Desktop` originator,
+    /// `user` thread_source) or an older rollout with unknown fields is shown.
     static func isHiddenThreadMeta(_ head: String) -> Bool {
         head.range(of: "\"thread_source\"\\s*:\\s*\"(automation|subagent)\"",
                    options: .regularExpression) != nil
+        || head.range(of: "\"originator\"\\s*:\\s*\"codex_exec\"",
+                      options: .regularExpression) != nil
     }
 
     private static func summary(for status: AgentTaskStatus) -> String {

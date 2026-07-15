@@ -126,8 +126,12 @@ private func sessionNames(_ map: [String: String]) throws -> SessionNames {
     #expect(SessionEventCollector.isHiddenThreadMeta(#"{"payload":{"cwd":"/x","thread_source":"automation","model_provider":"openai"}}"#))
     #expect(SessionEventCollector.isHiddenThreadMeta(#""thread_source": "automation""#))   // pretty-printed spacing
     #expect(SessionEventCollector.isHiddenThreadMeta(#"{"thread_source":"subagent","parent_thread_id":"019f498c","agent_nickname":"Pascal"}"#))
-    // Shown: the user's main interactive session, and older rollouts with no /
-    // unknown thread_source (fail-open, so we never hide real work).
+    // Hidden: a headless `codex exec` run (e.g. Claude Code driving the codex
+    // CLI) — thread_source is "user" but the originator gives it away.
+    #expect(SessionEventCollector.isHiddenThreadMeta(#"{"originator":"codex_exec","source":"exec","thread_source":"user"}"#))
+    // Shown: the user's main interactive session (Codex Desktop), and older
+    // rollouts with no / unknown fields (fail-open, so we never hide real work).
+    #expect(!SessionEventCollector.isHiddenThreadMeta(#"{"originator":"Codex Desktop","source":"vscode","thread_source":"user"}"#))
     #expect(!SessionEventCollector.isHiddenThreadMeta(#"{"thread_source":"user"}"#))
     #expect(!SessionEventCollector.isHiddenThreadMeta(#"{"thread_source":"vscode"}"#))
     #expect(!SessionEventCollector.isHiddenThreadMeta("{}"))
