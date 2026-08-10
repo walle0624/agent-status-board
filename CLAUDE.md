@@ -31,7 +31,8 @@ Hook 脚本写状态、Swift App 读状态。
   + CC 用量（Anthropic 限流响应头）。
 - `Stores/BoardStore.swift` —— `@Published` 状态、刷新循环、用量抓取节奏。
 - `App/StatusItemController.swift` —— 菜单栏液态玻璃水球（Core Graphics 自绘）。
-- `Views/DesktopWidgetView.swift` —— 桌面悬浮窗。
+- `Views/DesktopWidgetView.swift` —— 桌面悬浮窗（含 BorderBeam 边界光束）。
+- `Views/StatusViews.swift` —— 状态视觉件：LED 行 + ThinkingOrb 迷你思考球（会话行指示器）。
 
 ## 关键约定 & 坑（改这些地方前必看）
 1. **Hook 跑的是 `~/.agent-status-board/bin/` 里的副本，不是 repo 里的**。改完任何

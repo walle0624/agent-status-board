@@ -55,6 +55,49 @@ struct DesktopWidgetView: View {
     @State private var updating = false
 
     private var snapshot: AgentSnapshot { store.snapshot }
+
+    // MARK: border beam / ambient mood
+
+    /// The card's ambient state: a red beam when something needs you, amber
+    /// while work is in flight, and a single soft pulse once everything is
+    /// calm (no continuous animation when idle → ~zero CPU).
+    private var beamStyle: BorderBeam.Style {
+        if !attention.isEmpty || !running.isEmpty { return .rotate }
+        return .pulseOnce
+    }
+
+    /// Beam hues. Attention borrows the 暖橙 → 品红 → 紫 beam vocabulary but
+    /// red-shifted so it still reads "红 = 需要处理"; running stays in the
+    /// amber family and deliberately dimmer; calm pulses in a cool mint.
+    private var beamColors: [Color] {
+        if !attention.isEmpty {
+            return [Color(.sRGB, red: 1.0, green: 0.48, blue: 0.27),
+                    Color(.sRGB, red: 1.0, green: 0.18, blue: 0.39),
+                    Color(.sRGB, red: 0.69, green: 0.33, blue: 1.0)]
+        }
+        if !running.isEmpty {
+            return [Color(.sRGB, red: 1.0, green: 0.82, blue: 0.37),
+                    Color(.sRGB, red: 1.0, green: 0.62, blue: 0.24),
+                    Color(.sRGB, red: 1.0, green: 0.45, blue: 0.30)]
+        }
+        return [Color(.sRGB, red: 0.21, green: 0.82, blue: 0.37),
+                Color(.sRGB, red: 0.18, green: 0.83, blue: 0.66),
+                Color(.sRGB, red: 0.30, green: 0.76, blue: 1.0)]
+    }
+
+    /// Corner-glow hues matching the beam mood.
+    private var moodGlows: (Color, Color) {
+        if !attention.isEmpty {
+            return (Color(.sRGB, red: 1.0, green: 0.28, blue: 0.34).opacity(0.15),
+                    Color(.sRGB, red: 0.66, green: 0.30, blue: 0.98).opacity(0.13))
+        }
+        if !running.isEmpty {
+            return (Color(.sRGB, red: 1.0, green: 0.66, blue: 0.28).opacity(0.12),
+                    Color(.sRGB, red: 0.30, green: 0.52, blue: 0.95).opacity(0.10))
+        }
+        return (Color(.sRGB, red: 0.30, green: 0.52, blue: 0.95).opacity(0.11),
+                Color(.sRGB, red: 0.52, green: 0.32, blue: 0.85).opacity(0.11))
+    }
     private var attention: [AgentTask] {
         snapshot.visibleTasks.filter { [.waitingReview, .blocked, .failed, .stale].contains($0.status) }
     }
@@ -114,33 +157,37 @@ struct DesktopWidgetView: View {
         .background(
             ZStack {
                 VisualEffectView(material: .hudWindow)
-                // Deep navy base for the glassy look.
+                // Near-black base — 黑得纯粹, so the beams and orbs carry the light.
                 LinearGradient(
-                    colors: [Color(.sRGB, red: 0.09, green: 0.11, blue: 0.17).opacity(0.74),
-                             Color(.sRGB, red: 0.05, green: 0.06, blue: 0.11).opacity(0.84)],
+                    colors: [Color(.sRGB, red: 0.055, green: 0.066, blue: 0.104).opacity(0.80),
+                             Color(.sRGB, red: 0.016, green: 0.020, blue: 0.040).opacity(0.92)],
                     startPoint: .top, endPoint: .bottom
                 )
-                // Ambient corner glows give the card depth.
+                // Ambient corner glows give the card depth; their hue follows the mood.
                 RadialGradient(
-                    colors: [Color(.sRGB, red: 0.30, green: 0.52, blue: 0.95).opacity(0.12), .clear],
+                    colors: [moodGlows.0, .clear],
                     center: .topLeading, startRadius: 0, endRadius: 300
                 )
                 RadialGradient(
-                    colors: [Color(.sRGB, red: 0.52, green: 0.32, blue: 0.85).opacity(0.12), .clear],
+                    colors: [moodGlows.1, .clear],
                     center: .bottomTrailing, startRadius: 0, endRadius: 320
                 )
             }
         )
         .clipShape(RoundedRectangle(cornerRadius: 24, style: .continuous))
         .overlay(
-            RoundedRectangle(cornerRadius: 24, style: .continuous)
-                .strokeBorder(
-                    LinearGradient(
-                        colors: [Color.white.opacity(0.16), Color.white.opacity(0.03)],
-                        startPoint: .top, endPoint: .bottom
-                    ),
-                    lineWidth: 0.6
-                )
+            ZStack {
+                RoundedRectangle(cornerRadius: 24, style: .continuous)
+                    .strokeBorder(
+                        LinearGradient(
+                            colors: [Color.white.opacity(0.16), Color.white.opacity(0.03)],
+                            startPoint: .top, endPoint: .bottom
+                        ),
+                        lineWidth: 0.6
+                    )
+                // Border beam (needs you → red, in flight → amber, calm → one soft pulse).
+                BorderBeam(style: beamStyle, colors: beamColors)
+            }
         )
         // Tight contact shadow only. Must stay well inside the outer padding
         // below, or the window edge clips it into a hard rectangular line.
@@ -272,7 +319,7 @@ struct DesktopWidgetView: View {
     private func sessionRow(_ task: AgentTask, color: Color, detail: String, detailLines: Int) -> some View {
         ClickableRow(onTap: { onOpen(task) }) {
             HStack(alignment: .top, spacing: 9) {
-                LEDDot(color: color, flashing: false).padding(.top, 3)
+                statusOrb(task, color: color).padding(.top, 1)
                 VStack(alignment: .leading, spacing: 1) {
                     HStack(spacing: 5) {
                         Text(task.title.isEmpty ? "\(task.source.displayName) 会话" : task.title)
@@ -292,6 +339,20 @@ struct DesktopWidgetView: View {
                     .padding(.top, 3)
             }
         }
+    }
+
+    /// The session-row indicator: a mini thinking orb whose motion mirrors
+    /// the status — running spins, thinking breathes, needs-you pulses fast,
+    /// done settles into a dim, collapsed ball (static, no timeline).
+    private func statusOrb(_ task: AgentTask, color: Color) -> some View {
+        let mode: ThinkingOrb.Mode
+        switch task.status {
+        case .running: mode = .working
+        case .thinking: mode = .breathing
+        case .waitingReview, .blocked, .failed, .stale: mode = .pulsing
+        case .done: mode = .settled
+        }
+        return ThinkingOrb(mode: mode, color: color, size: 16)
     }
 
     private func reason(for task: AgentTask) -> String {
@@ -338,7 +399,8 @@ struct DesktopWidgetView: View {
         VStack(alignment: .leading, spacing: 5) {
             Divider().overlay(Glass.hairline)
             Text("正在执行 · \(running.count)")
-                .font(.system(size: 11)).foregroundStyle(Glass.textTertiary)
+                .font(.system(size: 10, weight: .semibold)).tracking(1.1)
+                .foregroundStyle(Glass.textTertiary)
             ForEach(running) { task in
                 sessionRow(task, color: Glass.amber, detail: runningDetail(task), detailLines: 1)
             }
@@ -383,7 +445,8 @@ struct DesktopWidgetView: View {
         VStack(alignment: .leading, spacing: 5) {
             Divider().overlay(Glass.hairline)
             Text("最近完成 · \(recentDone.count)")
-                .font(.system(size: 11)).foregroundStyle(Glass.textTertiary)
+                .font(.system(size: 10, weight: .semibold)).tracking(1.1)
+                .foregroundStyle(Glass.textTertiary)
             ForEach(recentDone) { task in
                 sessionRow(task, color: Glass.green, detail: doneDetail(task), detailLines: 1)
             }
@@ -430,7 +493,9 @@ struct DesktopWidgetView: View {
         VStack(alignment: .leading, spacing: 10) {
             Divider().overlay(Glass.hairline)
             HStack(spacing: 6) {
-                Text("余量").font(.system(size: 11)).foregroundStyle(Glass.textTertiary)
+                Text("余量")
+                    .font(.system(size: 10, weight: .semibold)).tracking(1.1)
+                    .foregroundStyle(Glass.textTertiary)
                 Spacer()
                 legendItem(Glass.green, "充足")
                 legendItem(Glass.amber, "偏低")
@@ -531,10 +596,10 @@ private struct ClickableRow<Content: View>: View {
             .frame(maxWidth: .infinity, alignment: .leading)
             .background(
                 RoundedRectangle(cornerRadius: 10, style: .continuous)
-                    .fill(Color.white.opacity(hover ? 0.08 : 0))
+                    .fill(Color.white.opacity(hover ? 0.085 : 0))
                     .overlay(
                         RoundedRectangle(cornerRadius: 10, style: .continuous)
-                            .strokeBorder(Color.white.opacity(hover ? 0.07 : 0), lineWidth: 0.5)
+                            .strokeBorder(Color.white.opacity(hover ? 0.12 : 0), lineWidth: 0.5)
                     )
                     .padding(.horizontal, -8)   // bleed the highlight outward only
                     .animation(.easeOut(duration: 0.16), value: hover)
@@ -616,5 +681,87 @@ private struct LEDDot: View {
             .overlay(rim)
             .frame(width: size, height: size)
             .shadow(color: color.opacity(glow), radius: size * 0.5)
+    }
+}
+
+/// A light beam gliding along the card's rounded border (Border Beam style):
+/// a short gradient segment — bright in the middle, fading at both ends —
+/// sweeping the perimeter at a slow, constant pace. A thick blurred copy of
+/// the same stroke, masked to the card's interior, is what makes the glow
+/// bleed inward (bloom) instead of looking like an outline.
+private struct BorderBeam: View {
+    enum Style { case off, rotate, pulseOnce }
+    let style: Style
+    let colors: [Color]          // 3 hues along the beam
+    var cornerRadius: CGFloat = 24
+    /// Seconds per full revolution. Slow + steady reads "alive", not "alarm".
+    var period: Double = 7.5
+
+    var body: some View {
+        switch style {
+        case .off:
+            EmptyView()
+        case .rotate:
+            TimelineView(.animation(minimumInterval: 1.0 / 30.0)) { ctx in
+                beam(phase: ctx.date.timeIntervalSinceReferenceDate / period)
+            }
+        case .pulseOnce:
+            PulseBeam(colors: colors, cornerRadius: cornerRadius)
+        }
+    }
+
+    private func beam(phase: Double) -> some View {
+        // Rotating an angular gradient via start/end angles (the gradient
+        // itself is fixed: clear → beam → clear over one revolution).
+        let angle = phase.truncatingRemainder(dividingBy: 1) * 360
+        let gradient = AngularGradient(
+            stops: [
+                .init(color: .clear, location: 0.00),
+                .init(color: colors[0].opacity(0.0), location: 0.25),
+                .init(color: colors[0], location: 0.335),
+                .init(color: colors[1], location: 0.42),
+                .init(color: colors[2], location: 0.505),
+                .init(color: colors[2].opacity(0.0), location: 0.59),
+                .init(color: .clear, location: 1.00),
+            ],
+            center: .center,
+            startAngle: .degrees(angle),
+            endAngle: .degrees(angle + 360)
+        )
+        return ZStack {
+            // Bloom: thick, blurred, kept inside the card by the mask.
+            RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+                .strokeBorder(gradient, lineWidth: 12)
+                .blur(radius: 6)
+                .opacity(0.45)
+                .mask(RoundedRectangle(cornerRadius: cornerRadius, style: .continuous).fill())
+            // Crisp core line.
+            RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+                .strokeBorder(gradient, lineWidth: 1.2)
+        }
+    }
+}
+
+/// A single soft pulse around the border, fired once when the board goes
+/// calm, then settling at a barely-there trace. No TimelineView → zero CPU
+/// once the animation completes.
+private struct PulseBeam: View {
+    let colors: [Color]
+    var cornerRadius: CGFloat = 24
+    @State private var glow = 0.0
+
+    var body: some View {
+        RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+            .strokeBorder(
+                LinearGradient(colors: colors, startPoint: .topLeading, endPoint: .bottomTrailing),
+                lineWidth: 1.0
+            )
+            .opacity(glow)
+            .onAppear {
+                withAnimation(.easeIn(duration: 0.9)) { glow = 0.30 }
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.9) {
+                    withAnimation(.easeOut(duration: 1.6)) { glow = 0.06 }
+                }
+            }
     }
 }
