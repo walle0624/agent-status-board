@@ -18,13 +18,32 @@ struct VisualEffectView: NSViewRepresentable {
 
 /// Vivid traffic-light colors used on the dark glass surface.
 enum Glass {
-    static let red = Color(.sRGB, red: 1.0, green: 0.353, blue: 0.322)     // #FF5A52
-    static let amber = Color(.sRGB, red: 1.0, green: 0.698, blue: 0.243)   // #FFB23E
-    static let green = Color(.sRGB, red: 0.212, green: 0.820, blue: 0.373) // #36D15F
+    // Evened-out brightness, slightly lower saturation: the three states now
+    // carry equal weight instead of red/amber shouting over green.
+    static let red = Color(.sRGB, red: 0.957, green: 0.396, blue: 0.365)   // #F4655D
+    static let amber = Color(.sRGB, red: 0.937, green: 0.675, blue: 0.286) // #EFAC49
+    static let green = Color(.sRGB, red: 0.263, green: 0.784, blue: 0.471) // #43C878
+    /// The status orb at rest — a dark, unlit glass ball for an idle board.
+    static let inert = Color(.sRGB, red: 0.42, green: 0.46, blue: 0.54)
     static let textPrimary = Color.white.opacity(0.95)
     static let textSecondary = Color.white.opacity(0.52)
     static let textTertiary = Color.white.opacity(0.34)
-    static let hairline = Color.white.opacity(0.10)
+
+    /// Blend a color toward another. The liquid meter needs "this color, 30%
+    /// lighter at the top / 18% darker at the bottom"; `Color.mix(with:by:)`
+    /// would do it but is macOS 15+, and this package targets 14.
+    static func blend(_ c: Color, toward other: Color, _ t: Double) -> Color {
+        let a = NSColor(c).usingColorSpace(.sRGB) ?? .white
+        let b = NSColor(other).usingColorSpace(.sRGB) ?? .white
+        let f = CGFloat(min(1, max(0, t)))
+        return Color(
+            .sRGB,
+            red: Double(a.redComponent + (b.redComponent - a.redComponent) * f),
+            green: Double(a.greenComponent + (b.greenComponent - a.greenComponent) * f),
+            blue: Double(a.blueComponent + (b.blueComponent - a.blueComponent) * f),
+            opacity: Double(a.alphaComponent)
+        )
+    }
 
     /// Traffic-light color for a usage load: green (充足) / amber (偏高) / red (耗尽).
     static func load(_ pct: Double) -> Color {
@@ -55,49 +74,6 @@ struct DesktopWidgetView: View {
     @State private var updating = false
 
     private var snapshot: AgentSnapshot { store.snapshot }
-
-    // MARK: border beam / ambient mood
-
-    /// The card's ambient state: a red beam when something needs you, amber
-    /// while work is in flight, and a single soft pulse once everything is
-    /// calm (no continuous animation when idle → ~zero CPU).
-    private var beamStyle: BorderBeam.Style {
-        if !attention.isEmpty || !running.isEmpty { return .rotate }
-        return .pulseOnce
-    }
-
-    /// Beam hues. Attention borrows the 暖橙 → 品红 → 紫 beam vocabulary but
-    /// red-shifted so it still reads "红 = 需要处理"; running stays in the
-    /// amber family and deliberately dimmer; calm pulses in a cool mint.
-    private var beamColors: [Color] {
-        if !attention.isEmpty {
-            return [Color(.sRGB, red: 1.0, green: 0.48, blue: 0.27),
-                    Color(.sRGB, red: 1.0, green: 0.18, blue: 0.39),
-                    Color(.sRGB, red: 0.69, green: 0.33, blue: 1.0)]
-        }
-        if !running.isEmpty {
-            return [Color(.sRGB, red: 1.0, green: 0.82, blue: 0.37),
-                    Color(.sRGB, red: 1.0, green: 0.62, blue: 0.24),
-                    Color(.sRGB, red: 1.0, green: 0.45, blue: 0.30)]
-        }
-        return [Color(.sRGB, red: 0.21, green: 0.82, blue: 0.37),
-                Color(.sRGB, red: 0.18, green: 0.83, blue: 0.66),
-                Color(.sRGB, red: 0.30, green: 0.76, blue: 1.0)]
-    }
-
-    /// Corner-glow hues matching the beam mood.
-    private var moodGlows: (Color, Color) {
-        if !attention.isEmpty {
-            return (Color(.sRGB, red: 1.0, green: 0.28, blue: 0.34).opacity(0.15),
-                    Color(.sRGB, red: 0.66, green: 0.30, blue: 0.98).opacity(0.13))
-        }
-        if !running.isEmpty {
-            return (Color(.sRGB, red: 1.0, green: 0.66, blue: 0.28).opacity(0.12),
-                    Color(.sRGB, red: 0.30, green: 0.52, blue: 0.95).opacity(0.10))
-        }
-        return (Color(.sRGB, red: 0.30, green: 0.52, blue: 0.95).opacity(0.11),
-                Color(.sRGB, red: 0.52, green: 0.32, blue: 0.85).opacity(0.11))
-    }
     private var attention: [AgentTask] {
         snapshot.visibleTasks.filter { [.waitingReview, .blocked, .failed, .stale].contains($0.status) }
     }
@@ -152,48 +128,51 @@ struct DesktopWidgetView: View {
                 usageBlock                             // 仅显示本机装了的工具的用量
             }
         }
-        .padding(18)
+        .padding(16)
         .frame(width: 312, alignment: .leading)
         .background(
             ZStack {
                 VisualEffectView(material: .hudWindow)
-                // Near-black base — 黑得纯粹, so the beams and orbs carry the light.
+                // Deep water: light filtering through the surface at the top,
+                // going properly dark at the bottom. Three stops so the middle
+                // doesn't flatten into grey.
                 LinearGradient(
-                    colors: [Color(.sRGB, red: 0.055, green: 0.066, blue: 0.104).opacity(0.80),
-                             Color(.sRGB, red: 0.016, green: 0.020, blue: 0.040).opacity(0.92)],
+                    colors: [Color(.sRGB, red: 0.07, green: 0.13, blue: 0.19).opacity(0.82),
+                             Color(.sRGB, red: 0.05, green: 0.07, blue: 0.12).opacity(0.86),
+                             Color(.sRGB, red: 0.02, green: 0.03, blue: 0.07).opacity(0.93)],
                     startPoint: .top, endPoint: .bottom
                 )
-                // Ambient corner glows give the card depth; their hue follows the mood.
-                RadialGradient(
-                    colors: [moodGlows.0, .clear],
-                    center: .topLeading, startRadius: 0, endRadius: 300
-                )
-                RadialGradient(
-                    colors: [moodGlows.1, .clear],
-                    center: .bottomTrailing, startRadius: 0, endRadius: 320
-                )
+                // The light now has a source you can point at: a wash of the
+                // aggregate state's color blooming from behind the header orb,
+                // instead of two corner glows coming from nowhere. Static —
+                // only the orb itself is allowed to move.
+                GeometryReader { geo in
+                    RadialGradient(
+                        colors: [orbColor(snapshot.overallStatus)
+                            .opacity(haloOpacity(snapshot.overallStatus)), .clear],
+                        center: UnitPoint(x: 34 / max(geo.size.width, 1),
+                                          y: 30 / max(geo.size.height, 1)),
+                        startRadius: 0, endRadius: 130
+                    )
+                }
             }
         )
         .clipShape(RoundedRectangle(cornerRadius: 24, style: .continuous))
         .overlay(
-            ZStack {
-                RoundedRectangle(cornerRadius: 24, style: .continuous)
-                    .strokeBorder(
-                        LinearGradient(
-                            colors: [Color.white.opacity(0.16), Color.white.opacity(0.03)],
-                            startPoint: .top, endPoint: .bottom
-                        ),
-                        lineWidth: 0.6
-                    )
-                // Border beam (needs you → red, in flight → amber, calm → one soft pulse).
-                BorderBeam(style: beamStyle, colors: beamColors)
-            }
+            RoundedRectangle(cornerRadius: 24, style: .continuous)
+                .strokeBorder(
+                    LinearGradient(
+                        colors: [Color.white.opacity(0.16), Color.white.opacity(0.03)],
+                        startPoint: .top, endPoint: .bottom
+                    ),
+                    lineWidth: 0.6
+                )
         )
         // Tight contact shadow only. Must stay well inside the outer padding
         // below, or the window edge clips it into a hard rectangular line.
         // In the popover the system provides the chrome, so drop both.
         .shadow(color: .black.opacity(inPopover ? 0 : 0.28), radius: 8, y: 4)
-        .padding(inPopover ? 10 : 22)
+        .padding(inPopover ? 12 : 24)
         .opacity(appeared ? 1 : 0)
         .scaleEffect(appeared ? 1 : 0.97)
         .onAppear { withAnimation(.spring(response: 0.42, dampingFraction: 0.82)) { appeared = true } }
@@ -214,11 +193,12 @@ struct DesktopWidgetView: View {
                 .help(isPinned ? "取消置顶" : "置顶")
             }
 
-            Text("Agent 状态")
-                .font(.system(size: 13, weight: .medium))
-                .foregroundStyle(Glass.textPrimary)
-
-            statePill(st)
+            // The window's face: one glass orb carrying the aggregate state,
+            // and one line saying what that means. Only the needs-you orb moves.
+            // 16pt — a step above the 10pt row LEDs to hold the hierarchy,
+            // without the orb becoming the thing you look at first.
+            LEDDot(color: orbColor(st), flashing: st == .needsAttention, size: 16)
+            digest.lineLimit(1)   // header stays exactly one line, whatever the counts
 
             Spacer()
 
@@ -233,32 +213,70 @@ struct DesktopWidgetView: View {
             .help("刷新")
 
             if !inPopover {
-                Button(action: onClose) {
-                    LEDDot(color: Glass.red, flashing: false, size: 12)
-                }
-                .buttonStyle(.plain)
-                .help("隐藏（可从菜单栏重新打开）")
+                CloseButton(action: onClose)
             }
         }
     }
 
-    private func statePill(_ st: BoardOverallStatus) -> some View {
-        let (color, text) = pill(st)
-        return HStack(spacing: 5) {
-            LEDDot(color: color, flashing: st == .needsAttention)
-            Text(text).font(.system(size: 11)).foregroundStyle(color.opacity(0.95))
+    /// The orb's color for the aggregate state — the same traffic-light
+    /// vocabulary the old pill used, except idle is an unlit ball rather than
+    /// green, so "nothing happening" doesn't read as "all clear, look at me".
+    private func orbColor(_ st: BoardOverallStatus) -> Color {
+        switch st {
+        case .needsAttention: Glass.red
+        case .running, .thinking: Glass.amber
+        case .done: Glass.green
+        case .idle: Glass.inert
         }
-        .padding(.horizontal, 8).padding(.vertical, 2)
-        .background(Capsule().fill(color.opacity(0.16)))
     }
 
-    private func pill(_ st: BoardOverallStatus) -> (Color, String) {
+    /// Strength of the header halo per state — urgent states carry more light,
+    /// an idle board barely glows at all.
+    private func haloOpacity(_ st: BoardOverallStatus) -> Double {
         switch st {
-        case .needsAttention: (Glass.red, "需要处理")
-        case .running: (Glass.amber, "正在执行")
-        case .thinking: (Glass.amber, "思考中")
-        case .done: (Glass.green, "已完成")
-        case .idle: (Glass.green, "空闲")
+        case .needsAttention: 0.12
+        case .running, .thinking: 0.09
+        case .done: 0.06
+        case .idle: 0.04
+        }
+    }
+
+    /// How a run of the digest reads. The wording and the coloring are decided
+    /// together in `digestRuns` so they can't drift apart.
+    enum DigestTone: Equatable { case attention, running, plain, calm }
+
+    /// The header's one-line verdict, as (text, tone) runs. Pure — the whole
+    /// wording rule is unit-testable without building a view.
+    static func digestRuns(attention: Int, running: Int) -> [(text: String, tone: DigestTone)] {
+        if attention > 0 {
+            var runs: [(text: String, tone: DigestTone)] =
+                [("\(attention)", .attention), (" 待处理", .plain)]
+            if running > 0 {
+                runs += [(" · ", .plain), ("\(running)", .running), (" 运行中", .plain)]
+            }
+            return runs
+        }
+        if running > 0 {
+            return [("\(running)", .running), (" 个任务执行中", .plain)]
+        }
+        return [("一切就绪", .calm)]
+    }
+
+    private var digest: Text {
+        Self.digestRuns(attention: attention.count, running: running.count)
+            .reduce(Text("")) { $0 + styled($1) }
+    }
+
+    /// Every run is the same 13pt regular: a count is distinguished only by its
+    /// state color (and monospaced digits so it doesn't jitter on refresh), so
+    /// "2" never jumps off the line ahead of the word it belongs to.
+    private func styled(_ run: (text: String, tone: DigestTone)) -> Text {
+        let t = Text(run.text).font(.system(size: 13))
+        switch run.tone {
+        case .attention: return t.monospacedDigit().foregroundStyle(Glass.red)
+        case .running: return t.monospacedDigit().foregroundStyle(Glass.amber)
+        case .plain: return t.foregroundStyle(Glass.textPrimary)
+        case .calm: return t.foregroundStyle(Glass.textSecondary)
         }
     }
 
@@ -270,7 +288,7 @@ struct DesktopWidgetView: View {
         Button {
             if !updating { updating = true; store.applyUpdate() }
         } label: {
-            HStack(spacing: 7) {
+            HStack(spacing: 8) {
                 Image(systemName: updating ? "arrow.triangle.2.circlepath" : "arrow.down.circle.fill")
                     .font(.system(size: 11))
                 Text(updating ? "更新中…（完成后自动重启）" : "有新版本 v\(version) · 点击更新")
@@ -281,7 +299,7 @@ struct DesktopWidgetView: View {
                 }
             }
             .foregroundStyle(accent)
-            .padding(.horizontal, 10).padding(.vertical, 7)
+            .padding(.horizontal, 12).padding(.vertical, 8)
             .frame(maxWidth: .infinity, alignment: .leading)
             .background(RoundedRectangle(cornerRadius: 10, style: .continuous).fill(accent.opacity(0.14)))
             .overlay(RoundedRectangle(cornerRadius: 10, style: .continuous)
@@ -313,64 +331,100 @@ struct DesktopWidgetView: View {
         }
     }
 
-    /// One session row: dot, title · source, a detail line, and a chevron. The
-    /// whole row opens the owning app/session on click.
+    /// One session row: dot, title · source, a detail line, how long ago it was
+    /// last active, and a chevron. The whole row opens the owning app/session on
+    /// click; the workspace path lives in the tooltip instead of on screen.
     @ViewBuilder
     private func sessionRow(_ task: AgentTask, color: Color, detail: String, detailLines: Int) -> some View {
         ClickableRow(onTap: { onOpen(task) }) {
-            HStack(alignment: .top, spacing: 9) {
-                statusOrb(task, color: color).padding(.top, 1)
-                VStack(alignment: .leading, spacing: 1) {
-                    HStack(spacing: 5) {
+            HStack(alignment: .top, spacing: 8) {
+                // +1pt past the arithmetic center: optically the dot reads as
+                // sitting on the title's midline rather than above it.
+                LEDDot(color: color, flashing: false).padding(.top, 4)
+                VStack(alignment: .leading, spacing: 0) {
+                    HStack(spacing: 4) {
                         Text(task.title.isEmpty ? "\(task.source.displayName) 会话" : task.title)
-                            .font(.system(size: 13)).foregroundStyle(Glass.textPrimary)
+                            .font(.system(size: 13, weight: .semibold))
+                            .foregroundStyle(Glass.textPrimary)
                             .lineLimit(1)
                         Text("· \(task.source.displayName)")
                             .font(.system(size: 11)).foregroundStyle(Glass.textTertiary)
                     }
                     Text(detail)
-                        .font(.system(size: 11)).foregroundStyle(Glass.textTertiary)
+                        .font(.system(size: 11)).foregroundStyle(Glass.textSecondary)
                         .lineLimit(detailLines)
                 }
                 Spacer(minLength: 4)
+                ageLabel(task)
                 Image(systemName: "chevron.right")
                     .font(.system(size: 10, weight: .semibold))
                     .foregroundStyle(Glass.textTertiary)
-                    .padding(.top, 3)
+                    .padding(.top, 4)
             }
         }
+        .help(task.workspace ?? "")
     }
 
-    /// The session-row indicator: a mini thinking orb whose motion mirrors
-    /// the status — running spins, thinking breathes, needs-you pulses fast,
-    /// done settles into a dim, collapsed ball (static, no timeline).
-    private func statusOrb(_ task: AgentTask, color: Color) -> some View {
-        let mode: ThinkingOrb.Mode
-        switch task.status {
-        case .running: mode = .working
-        case .thinking: mode = .breathing
-        case .waitingReview, .blocked, .failed, .stale: mode = .pulsing
-        case .done: mode = .settled
-        }
-        return ThinkingOrb(mode: mode, color: color, size: 16)
+    /// The one section-header style, shared by 正在执行 / 最近完成 / 余量 so the
+    /// three can't drift apart again.
+    private func sectionTitle(_ text: String) -> some View {
+        Text(text)
+            .font(.system(size: 11, weight: .medium))
+            .tracking(0.5)
+            .foregroundStyle(Glass.textTertiary)
     }
 
+    /// Right edge of a row: how long since it was last active. A session that is
+    /// supposed to be working but has gone quiet for over 5 minutes is flagged
+    /// stalled (⏸ + amber) — static, so it informs without pulling the eye.
+    @ViewBuilder
+    private func ageLabel(_ task: AgentTask) -> some View {
+        let now = snapshot.refreshedAt
+        let secs = now.timeIntervalSince(task.lastActivityAt)
+        let stalled = (task.status == .running || task.status == .thinking) && secs > 300
+        let text = Self.relativeAge(task.lastActivityAt, now: now)
+        Text(stalled ? "⏸ " + text : text)
+            .font(.system(size: 11).monospacedDigit())
+            .foregroundStyle(stalled ? Glass.amber : Glass.textSecondary)
+            .fixedSize()
+            .padding(.top, 4)
+    }
+
+    /// Compact age of a row: "刚刚" (<1m) / "7m" (<1h) / "1h24m" (<24h). Past a
+    /// day it switches to calendar wording — "昨天" / "6-21" — because the idle
+    /// resume list holds days-old sessions and "76h5m" stops being readable.
+    /// `now` and `calendar` are injected so this stays a pure, testable function.
+    static func relativeAge(_ date: Date, now: Date, calendar: Calendar = .current) -> String {
+        let secs = max(0, Int(now.timeIntervalSince(date)))
+        if secs < 60 { return "刚刚" }
+        let mins = secs / 60
+        if mins < 60 { return "\(mins)m" }
+        if secs < 86_400 { return "\(mins / 60)h\(mins % 60)m" }
+        // Day gap off the calendar (not 86400s arithmetic) so DST and timezone
+        // shifts can't slide a row onto the wrong day.
+        let gap = calendar.dateComponents(
+            [.day],
+            from: calendar.startOfDay(for: date),
+            to: calendar.startOfDay(for: now)
+        ).day ?? 0
+        if gap == 1 { return "昨天" }
+        let c = calendar.dateComponents([.month, .day], from: date)
+        return "\(c.month ?? 0)-\(c.day ?? 0)"
+    }
+
+    /// Detail line for a needs-you row: what it is waiting on, led by the LLM
+    /// note when there is one, else the tool it stopped at. No path (tooltip)
+    /// and no timestamp (right-edge label).
     private func reason(for task: AgentTask) -> String {
-        // Prefer the LLM-written note about what it's waiting for.
-        if let n = task.note, !n.isEmpty { return n }
-        var base: String
+        if let n = task.note, !n.isEmpty { return "需要你：" + n }
+        if let t = task.lastTool, !t.isEmpty { return "需要你：⚙ \(t)" }
         switch task.status {
-        case .waitingReview: base = "等待你的输入或授权"
-        case .blocked: base = "被阻塞，等待信息"
-        case .failed: base = "执行失败，需检查"
-        case .stale: base = "疑似停滞"
-        default: base = task.status.displayName
+        case .waitingReview: return "等待你的输入或授权"
+        case .blocked: return "被阻塞，等待信息"
+        case .failed: return "执行失败，需检查"
+        case .stale: return "疑似停滞"
+        default: return task.status.displayName
         }
-        if let t = task.lastTool, !t.isEmpty { base += " · ⚙ \(t)" }
-        if let w = task.workspace, !w.isEmpty {
-            base += " · " + (w as NSString).abbreviatingWithTildeInPath
-        }
-        return base
     }
 
     // MARK: running
@@ -396,35 +450,33 @@ struct DesktopWidgetView: View {
     /// Secondary list, shown under the attention hero so running sessions stay
     /// visible as rows (never collapsed into a count) when something needs you.
     private var runningListBlock: some View {
-        VStack(alignment: .leading, spacing: 5) {
-            Divider().overlay(Glass.hairline)
-            Text("正在执行 · \(running.count)")
-                .font(.system(size: 10, weight: .semibold)).tracking(1.1)
-                .foregroundStyle(Glass.textTertiary)
+        VStack(alignment: .leading, spacing: 4) {
+            Hairline()
+            sectionTitle("正在执行 · \(running.count)")
             ForEach(running) { task in
                 sessionRow(task, color: Glass.amber, detail: runningDetail(task), detailLines: 1)
             }
         }
     }
 
+    /// Detail line for a running row: what it is actually doing. The LLM summary
+    /// wins when there is one; otherwise the state plus the tool it is on. No
+    /// path (tooltip), no model, no timestamp (right-edge label).
     private func runningDetail(_ task: AgentTask) -> String {
-        var parts = [task.status == .thinking ? "思考中" : "正在执行"]
-        if let m = task.model, !m.isEmpty { parts.append(m) }
-        if let w = task.workspace, !w.isEmpty {
-            parts.append((w as NSString).abbreviatingWithTildeInPath)
-        }
-        if let t = task.lastTool, !t.isEmpty { parts.append("⚙ \(t)") }
-        return parts.joined(separator: " · ")
+        if let n = task.note, !n.isEmpty { return n }
+        let state = task.status == .thinking ? "思考中" : "正在执行"
+        if let t = task.lastTool, !t.isEmpty { return state + " · ⚙ \(t)" }
+        return state
     }
 
     // MARK: calm state
 
     private var calmState: some View {
-        HStack(spacing: 10) {
+        HStack(spacing: 12) {
             Image(systemName: "checkmark.circle")
                 .font(.system(size: 28))
                 .foregroundStyle(Glass.green)
-            VStack(alignment: .leading, spacing: 1) {
+            VStack(alignment: .leading, spacing: 0) {
                 Text("没有待处理事项")
                     .font(.system(size: 14, weight: .medium))
                     .foregroundStyle(Glass.textPrimary)
@@ -432,7 +484,7 @@ struct DesktopWidgetView: View {
                     .font(.system(size: 12)).foregroundStyle(Glass.textSecondary)
             }
         }
-        .padding(.vertical, 2)
+        .padding(.vertical, 4)
     }
 
     // MARK: recently completed (kept across days)
@@ -442,40 +494,24 @@ struct DesktopWidgetView: View {
     /// "最近完成", and each row's timestamp shows how recent it is. Rows are
     /// clickable to reopen the session.
     private var recentDoneBlock: some View {
-        VStack(alignment: .leading, spacing: 5) {
-            Divider().overlay(Glass.hairline)
-            Text("最近完成 · \(recentDone.count)")
-                .font(.system(size: 10, weight: .semibold)).tracking(1.1)
-                .foregroundStyle(Glass.textTertiary)
+        VStack(alignment: .leading, spacing: 4) {
+            Hairline()
+            sectionTitle("最近完成 · \(recentDone.count)")
             ForEach(recentDone) { task in
                 sessionRow(task, color: Glass.green, detail: doneDetail(task), detailLines: 1)
             }
         }
     }
 
-    /// Detail line for a completed row: when it finished (calendar-aware, so it
-    /// reads right across days), plus the LLM summary of what happened (falling
-    /// back to the workspace path).
+    /// Detail line for a completed row: the LLM summary of what happened,
+    /// falling back to the workspace path. When it finished is carried by the
+    /// right-edge age label instead of this line.
     private func doneDetail(_ task: AgentTask) -> String {
-        var parts = [doneWhen(task.lastActivityAt)]
-        if let n = task.note, !n.isEmpty {
-            parts.append(n)
-        } else if let w = task.workspace, !w.isEmpty {
-            parts.append((w as NSString).abbreviatingWithTildeInPath)
+        if let n = task.note, !n.isEmpty { return n }
+        if let w = task.workspace, !w.isEmpty {
+            return (w as NSString).abbreviatingWithTildeInPath
         }
-        return parts.joined(separator: " · ")
-    }
-
-    /// Calendar-aware finish time for a completed row: "今天 14:30" /
-    /// "昨天 19:25" / "6/21 10:00".
-    private func doneWhen(_ date: Date) -> String {
-        let cal = Calendar.current
-        let f = DateFormatter()
-        f.locale = Locale(identifier: "zh_CN")
-        if cal.isDateInToday(date) { f.dateFormat = "HH:mm"; return "今天 " + f.string(from: date) }
-        if cal.isDateInYesterday(date) { f.dateFormat = "HH:mm"; return "昨天 " + f.string(from: date) }
-        f.dateFormat = "M/d HH:mm"
-        return f.string(from: date)
+        return ""
     }
 
     /// Short relative time like "刚刚" / "3 分钟前" / "2 小时前", per the snapshot.
@@ -490,12 +526,10 @@ struct DesktopWidgetView: View {
     // MARK: usage (Codex 5h / weekly)
 
     private var usageBlock: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            Divider().overlay(Glass.hairline)
-            HStack(spacing: 6) {
-                Text("余量")
-                    .font(.system(size: 10, weight: .semibold)).tracking(1.1)
-                    .foregroundStyle(Glass.textTertiary)
+        VStack(alignment: .leading, spacing: 12) {
+            Hairline()
+            HStack(spacing: 8) {
+                sectionTitle("余量")
                 Spacer()
                 legendItem(Glass.green, "充足")
                 legendItem(Glass.amber, "偏低")
@@ -528,9 +562,9 @@ struct DesktopWidgetView: View {
         // but Codex only updates when it makes a request, so an idle Codex goes
         // stale. Mark it so the number isn't read as live.
         let stale = u.snapshotAt.timeIntervalSince(snapshot.refreshedAt) < -360
-        return VStack(alignment: .leading, spacing: 6) {
-            HStack(spacing: 7) {
-                LEDDot(color: Glass.load(peak), flashing: false, size: 11)
+        return VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 8) {
+                LEDDot(color: Glass.load(peak), flashing: false, size: 9)
                 Text(name).font(.system(size: 13, weight: .semibold)).foregroundStyle(Glass.textPrimary)
                 if let p = u.plan, !p.isEmpty {
                     Text("· \(p)").font(.system(size: 11)).foregroundStyle(Glass.textTertiary)
@@ -540,7 +574,7 @@ struct DesktopWidgetView: View {
                         .font(.system(size: 10)).foregroundStyle(Glass.amber.opacity(0.75))
                 }
             }
-            VStack(alignment: .leading, spacing: 6) {
+            VStack(alignment: .leading, spacing: 8) {
                 if let w = u.short { usageRow(usageLabel(w), w) }
                 if let w = u.long { usageRow(usageLabel(w), w) }
             }
@@ -559,7 +593,7 @@ struct DesktopWidgetView: View {
 
     private func usageRow(_ label: String, _ w: UsageWindow) -> some View {
         let remaining = max(0, 100 - w.usedPercent)        // 像电量：还剩多少
-        return HStack(spacing: 10) {
+        return HStack(spacing: 12) {
             Text(label).font(.system(size: 11)).foregroundStyle(Glass.textSecondary)
                 .frame(width: 40, alignment: .leading)
             UsageBar(remaining: remaining).frame(maxWidth: .infinity)
@@ -582,6 +616,41 @@ struct DesktopWidgetView: View {
     }
 }
 
+/// Neutral hide control, matching the refresh button's shape. Deliberately not
+/// a red orb any more: the header already carries one status orb, and a second
+/// red ball in the corner read as a second status rather than as a button.
+private struct CloseButton: View {
+    let action: () -> Void
+    @State private var hover = false
+
+    var body: some View {
+        Button(action: action) {
+            Image(systemName: "xmark")
+                .font(.system(size: 10, weight: .semibold))
+                .foregroundStyle(Color.white.opacity(hover ? 0.55 : 0.38))
+                .frame(width: 22, height: 22)
+                .background(Circle().fill(Color.white.opacity(hover ? 0.10 : 0.06)))
+        }
+        .buttonStyle(.plain)
+        .help("隐藏（可从菜单栏重新打开）")
+        .onHover { hover = $0 }
+        .animation(.easeOut(duration: 0.16), value: hover)
+    }
+}
+
+/// Section rule: a hairline that fades out left-to-right instead of a flat
+/// divider, so it reads as a lit edge catching the overhead light rather than a
+/// drawn line.
+private struct Hairline: View {
+    var body: some View {
+        LinearGradient(
+            colors: [Color.white.opacity(0.12), Color.white.opacity(0.03)],
+            startPoint: .leading, endPoint: .trailing
+        )
+        .frame(height: 1)
+    }
+}
+
 /// A full-width row that opens the owning session on click, with a subtle hover
 /// highlight and a pointing-hand cursor as the affordance. Dragging the widget
 /// still works from the header and the empty areas between rows.
@@ -592,24 +661,27 @@ private struct ClickableRow<Content: View>: View {
 
     var body: some View {
         content()
-            .padding(.vertical, 5)
+            .padding(.vertical, 4)
             .frame(maxWidth: .infinity, alignment: .leading)
-            .background(
-                RoundedRectangle(cornerRadius: 10, style: .continuous)
-                    .fill(Color.white.opacity(hover ? 0.085 : 0))
-                    .overlay(
-                        RoundedRectangle(cornerRadius: 10, style: .continuous)
-                            .strokeBorder(Color.white.opacity(hover ? 0.12 : 0), lineWidth: 0.5)
-                    )
-                    .padding(.horizontal, -8)   // bleed the highlight outward only
-                    .animation(.easeOut(duration: 0.16), value: hover)
-            )
+            .background(chip)
             .contentShape(Rectangle())
             .onTapGesture(perform: onTap)
             .onHover { h in
                 hover = h
                 if h { NSCursor.pointingHand.push() } else { NSCursor.pop() }
             }
+    }
+
+    /// Rows carry no standing background at all — every row is invisible at
+    /// rest and lights up only under the cursor. A needs-you row is told apart
+    /// by its red orb, the hero count above it, and its red timestamp.
+    private var chip: some View {
+        let shape = RoundedRectangle(cornerRadius: 10, style: .continuous)
+        return shape
+            .fill(Color.white.opacity(hover ? 0.08 : 0))
+            .overlay(shape.strokeBorder(Color.white.opacity(hover ? 0.07 : 0), lineWidth: 0.5))
+            .padding(.horizontal, -8)   // bleed the highlight outward only
+            .animation(.easeOut(duration: 0.16), value: hover)
     }
 }
 
@@ -619,26 +691,61 @@ private struct ClickableRow<Content: View>: View {
 private struct UsageBar: View {
     /// 0…100 — how much quota REMAINS.
     let remaining: Double
+    private let barHeight: CGFloat = 8
+
     var body: some View {
         GeometryReader { geo in
-            let w = max(7, geo.size.width * min(1, max(0, remaining) / 100))
+            let w = max(barHeight, geo.size.width * min(1, max(0, remaining) / 100))
             ZStack(alignment: .leading) {
-                Capsule().fill(Color.white.opacity(0.08))
-                Capsule()
-                    .fill(LinearGradient(colors: [color.opacity(0.85), color],
-                                         startPoint: .top, endPoint: .bottom))
-                    .overlay(
-                        Capsule().fill(LinearGradient(
-                            colors: [Color.white.opacity(0.35), .clear],
-                            startPoint: .top, endPoint: .center))
-                    )
+                track
+                fill
                     .frame(width: w)
-                    .shadow(color: color.opacity(0.45), radius: 3, y: 0)
                     .animation(.easeOut(duration: 0.55), value: remaining)
             }
         }
-        .frame(height: 7)
+        .frame(height: barHeight)
     }
+
+    /// A recessed groove: dark bed plus a dark line along the top inner edge —
+    /// the shadow an overhead light casts inside a channel.
+    private var track: some View {
+        Capsule()
+            .fill(Color.white.opacity(0.07))
+            .overlay(
+                Capsule().strokeBorder(
+                    LinearGradient(colors: [Color.black.opacity(0.35), .clear],
+                                   startPoint: .top, endPoint: .bottom),
+                    lineWidth: 1
+                )
+            )
+    }
+
+    /// The liquid body, borrowed from the menu-bar orb: lighter at the top,
+    /// darker at the bottom, with a sheen across the upper 45% and a static
+    /// bloom at the head of the fill. Held completely still — no animation
+    /// beyond the width change.
+    private var fill: some View {
+        Capsule()
+            .fill(LinearGradient(
+                colors: [Glass.blend(color, toward: .white, 0.30),
+                         Glass.blend(color, toward: .black, 0.18)],
+                startPoint: .top, endPoint: .bottom))
+            .overlay(alignment: .top) {
+                LinearGradient(colors: [Color.white.opacity(0.30), .clear],
+                               startPoint: .top, endPoint: .bottom)
+                    .frame(height: barHeight * 0.45)
+            }
+            .clipShape(Capsule())
+            // Outside the clip so the bloom can spill past the fill's head.
+            // The one accent light in the window.
+            .overlay(alignment: .trailing) {
+                Capsule()
+                    .fill(color.opacity(0.35))
+                    .frame(width: 3)
+                    .blur(radius: 3)
+            }
+    }
+
     private var color: Color { Glass.loadRemaining(remaining) }
 }
 
@@ -652,116 +759,40 @@ private struct LEDDot: View {
 
     var body: some View {
         if flashing {
+            // The one moving thing in the window: the needs-you orb's glow
+            // breathing on a slow 2.4s sine. Everything else is still.
             TimelineView(.animation) { ctx in
                 let t = ctx.date.timeIntervalSinceReferenceDate
-                let phase = (sin(t * 2 * .pi / 1.4) + 1) / 2   // 0…1, ~1.4s period
-                sphere(glow: 0.30 + 0.55 * phase)
+                let phase = (sin(t * 2 * .pi / 2.4) + 1) / 2   // 0…1, 2.4s period
+                sphere(glow: 0.55 + 0.45 * phase)              // 0.55…1.0
             }
         } else {
-            sphere(glow: 0.45)
+            sphere(glow: 0.35)
         }
     }
 
+    /// A miniature of the menu-bar orb: liquid body (light on top, sunk at the
+    /// bottom), an elliptical sheen up in the top third, and a thin glass shell.
+    /// Reads as a bead of colored liquid rather than a flat dot.
     private func sphere(glow: Double) -> some View {
-        let gradient = RadialGradient(
-            colors: [Color.white.opacity(0.95), color, color.opacity(0.72)],
-            center: UnitPoint(x: 0.34, y: 0.28),
-            startRadius: 0, endRadius: size * 0.9
+        let liquid = LinearGradient(
+            colors: [Glass.blend(color, toward: .white, 0.35),
+                     Glass.blend(color, toward: .black, 0.25)],
+            startPoint: .top, endPoint: .bottom
         )
-        let highlightSize: CGFloat = size * 0.30
-        let highlight = Circle()
-            .fill(Color.white.opacity(0.85))
-            .frame(width: highlightSize, height: highlightSize)
-            .blur(radius: size * 0.05)
-            .offset(x: -size * 0.18, y: -size * 0.20)
-        let rim = Circle().strokeBorder(Color.black.opacity(0.12), lineWidth: 0.5)
+        let sheen = Ellipse()
+            .fill(RadialGradient(
+                colors: [Color.white.opacity(0.55), .clear],
+                center: .center, startRadius: 0, endRadius: size * 0.30
+            ))
+            .frame(width: size * 0.55, height: size * 0.35)
+            .offset(x: -size * 0.07, y: -size * 0.18)
+        let shell = Circle().strokeBorder(Color.white.opacity(0.18), lineWidth: 0.5)
         return Circle()
-            .fill(gradient)
-            .overlay(highlight)
-            .overlay(rim)
+            .fill(liquid)
+            .overlay(sheen)
+            .overlay(shell)
             .frame(width: size, height: size)
             .shadow(color: color.opacity(glow), radius: size * 0.5)
-    }
-}
-
-/// A light beam gliding along the card's rounded border (Border Beam style):
-/// a short gradient segment — bright in the middle, fading at both ends —
-/// sweeping the perimeter at a slow, constant pace. A thick blurred copy of
-/// the same stroke, masked to the card's interior, is what makes the glow
-/// bleed inward (bloom) instead of looking like an outline.
-private struct BorderBeam: View {
-    enum Style { case off, rotate, pulseOnce }
-    let style: Style
-    let colors: [Color]          // 3 hues along the beam
-    var cornerRadius: CGFloat = 24
-    /// Seconds per full revolution. Slow + steady reads "alive", not "alarm".
-    var period: Double = 7.5
-
-    var body: some View {
-        switch style {
-        case .off:
-            EmptyView()
-        case .rotate:
-            TimelineView(.animation(minimumInterval: 1.0 / 30.0)) { ctx in
-                beam(phase: ctx.date.timeIntervalSinceReferenceDate / period)
-            }
-        case .pulseOnce:
-            PulseBeam(colors: colors, cornerRadius: cornerRadius)
-        }
-    }
-
-    private func beam(phase: Double) -> some View {
-        // Rotating an angular gradient via start/end angles (the gradient
-        // itself is fixed: clear → beam → clear over one revolution).
-        let angle = phase.truncatingRemainder(dividingBy: 1) * 360
-        let gradient = AngularGradient(
-            stops: [
-                .init(color: .clear, location: 0.00),
-                .init(color: colors[0].opacity(0.0), location: 0.25),
-                .init(color: colors[0], location: 0.335),
-                .init(color: colors[1], location: 0.42),
-                .init(color: colors[2], location: 0.505),
-                .init(color: colors[2].opacity(0.0), location: 0.59),
-                .init(color: .clear, location: 1.00),
-            ],
-            center: .center,
-            startAngle: .degrees(angle),
-            endAngle: .degrees(angle + 360)
-        )
-        return ZStack {
-            // Bloom: thick, blurred, kept inside the card by the mask.
-            RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
-                .strokeBorder(gradient, lineWidth: 12)
-                .blur(radius: 6)
-                .opacity(0.45)
-                .mask(RoundedRectangle(cornerRadius: cornerRadius, style: .continuous).fill())
-            // Crisp core line.
-            RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
-                .strokeBorder(gradient, lineWidth: 1.2)
-        }
-    }
-}
-
-/// A single soft pulse around the border, fired once when the board goes
-/// calm, then settling at a barely-there trace. No TimelineView → zero CPU
-/// once the animation completes.
-private struct PulseBeam: View {
-    let colors: [Color]
-    var cornerRadius: CGFloat = 24
-    @State private var glow = 0.0
-
-    var body: some View {
-        RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
-            .strokeBorder(
-                LinearGradient(colors: colors, startPoint: .topLeading, endPoint: .bottomTrailing),
-                lineWidth: 1.0
-            )
-            .opacity(glow)
-            .onAppear {
-                withAnimation(.easeIn(duration: 0.9)) { glow = 0.30 }
-                DispatchQueue.main.asyncAfter(deadline: .now() + 0.9) {
-                    withAnimation(.easeOut(duration: 1.6)) { glow = 0.06 }
-                }
-            }
     }
 }

@@ -52,14 +52,51 @@ cat > "$PLIST" <<EOF
 </plist>
 EOF
 
+# launchctl reports success even when the spawn afterwards fails — a job left
+# registered against a replaced bundle keeps returning 0 while every start dies
+# ("job state = spawn failed", last exit 78/EX_CONFIG). So the only signal worth
+# trusting is the process itself: poll for it, ~5s.
+wait_for_app() {
+  for _ in 1 2 3 4 5 6 7 8 9 10; do
+    pgrep -x AgentStatusBoard >/dev/null 2>&1 && return 0
+    sleep 0.5
+  done
+  return 1
+}
+
 # Start the freshly-installed app in the user's GUI session. Target gui/<uid>
 # explicitly so it works even when called from a launchd-spawned updater: if the
 # agent is already registered (the self-update case) restart its instance with
-# the new binary; otherwise register it (RunAtLoad starts it). `open` is a
-# universal fallback that always launches into the GUI session.
+# the new binary; otherwise register it (RunAtLoad starts it).
 if launchctl print "$DOMAIN/$LABEL" >/dev/null 2>&1; then
-  launchctl kickstart -k "$DOMAIN/$LABEL" 2>/dev/null || open "$APP_DST"
+  launchctl kickstart -k "$DOMAIN/$LABEL" 2>/dev/null || true
 else
-  launchctl bootstrap "$DOMAIN" "$PLIST" 2>/dev/null || launchctl load "$PLIST" 2>/dev/null || open "$APP_DST"
+  launchctl bootstrap "$DOMAIN" "$PLIST" 2>/dev/null || launchctl load "$PLIST" 2>/dev/null || true
+fi
+
+if ! wait_for_app; then
+  # The job is registered but its spawns are dying. A full bootout + bootstrap
+  # re-registers it against the new bundle. BUT bootout kills every process in
+  # the job — and during a self-update THIS SCRIPT is one of them (the app
+  # spawns the updater, which inherits XPC_SERVICE_NAME=$LABEL). So only reset
+  # when we are not running inside the job; the updater falls through to `open`
+  # and the registration heals on the next login / manual `autostart.sh on`.
+  if [ "${XPC_SERVICE_NAME:-}" != "$LABEL" ]; then
+    echo "app did not come up — re-registering the launchd job…"
+    launchctl bootout "$DOMAIN/$LABEL" 2>/dev/null || true
+    sleep 1
+    launchctl bootstrap "$DOMAIN" "$PLIST" 2>/dev/null || launchctl load "$PLIST" 2>/dev/null || true
+    wait_for_app || true
+  fi
+  # Last resort: `open` always launches into the GUI session (unmanaged, but the
+  # user gets the new version now; launchd picks it up again at next login).
+  if ! pgrep -x AgentStatusBoard >/dev/null 2>&1; then
+    echo "still not up — falling back to open(1)."
+    open "$APP_DST" >/dev/null 2>&1 || true
+    wait_for_app || {
+      echo "autostart: app failed to start. Inspect: launchctl print $DOMAIN/$LABEL" >&2
+      exit 1
+    }
+  fi
 fi
 echo "autostart enabled. App installed at $APP_DST and started."

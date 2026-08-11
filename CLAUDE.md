@@ -4,7 +4,7 @@ macOS 菜单栏水球 + 桌面悬浮窗，实时显示 Codex / Claude Code (CC) 
 需处理 / 已完成）和 5h/周用量**余额**。原生 Swift（SwiftUI + AppKit），Swift Package
 Manager，LSUIElement（无 Dock 图标）。以**源码**分发，各自本机编译 + 通过 GitHub 自更新。
 
-当前已发布版本：**v1.28**（每版"为什么"见 `CHANGELOG.md`）。
+当前已发布版本：**v1.29**（每版"为什么"见 `CHANGELOG.md`）。
 
 > **维护须知**：这份文件是本项目的"活文档"，会话进入此文件夹会自动加载它。凡是改动了
 > 编译 / 发版流程、关键约定或踩坑经验（包括上面的版本号），都要顺手同步更新这份 `CLAUDE.md`，
@@ -14,7 +14,9 @@ Manager，LSUIElement（无 Dock 图标）。以**源码**分发，各自本机�
 - `swift build` / `swift test` —— 编译 + 单测（Swift Testing 框架）。
 - `./script/build_and_run.sh run` —— debug 编译、组装 `.app` 并启动。
 - `./script/build_and_run.sh package` —— release 编译 → `dist/AgentStatusBoard.app`（+ zip）。
-- `./script/agent-hooks/autostart.sh on` —— 装到 `~/Applications` + 写 LaunchAgent + kickstart。
+  组装完 bundle 后会 **ad-hoc 签名**（`codesign --force --deep --sign -`），见坑 7。
+- `./script/agent-hooks/autostart.sh on` —— 装到 `~/Applications` + 写 LaunchAgent + kickstart，
+  然后 **pgrep 轮询确认真的起来了**，没起来就自动 bootout + 重新 bootstrap，最后 `open` 兜底。
   **这是让新构建"生效"的方式**（App 由 launchd 托管、`KeepAlive=false`）。
 - **改完代码让本机生效的固定套路**：`build_and_run.sh package` → `autostart.sh on`。
 
@@ -31,8 +33,8 @@ Hook 脚本写状态、Swift App 读状态。
   + CC 用量（Anthropic 限流响应头）。
 - `Stores/BoardStore.swift` —— `@Published` 状态、刷新循环、用量抓取节奏。
 - `App/StatusItemController.swift` —— 菜单栏液态玻璃水球（Core Graphics 自绘）。
-- `Views/DesktopWidgetView.swift` —— 桌面悬浮窗（含 BorderBeam 边界光束）。
-- `Views/StatusViews.swift` —— 状态视觉件：LED 行 + ThinkingOrb 迷你思考球（会话行指示器）。
+- `Views/DesktopWidgetView.swift` —— 桌面悬浮窗。
+- `Views/StatusViews.swift` —— 状态视觉件（玻璃 LED 等）。
 
 ## 关键约定 & 坑（改这些地方前必看）
 1. **Hook 跑的是 `~/.agent-status-board/bin/` 里的副本，不是 repo 里的**。改完任何
@@ -50,6 +52,18 @@ Hook 脚本写状态、Swift App 读状态。
 5. **用量·Codex**：优先实时 `wham/usage`；抓取偶发失败时**保留上次实时值、不要退回本地 rollout
    快照**（快照数字不一样、偏低）。`wham/usage` ≠ rollout 的 `token_count`，是两个不同指标。
 6. 菜单栏水球显示 5h **余量**（100 − used），随消耗 green→amber→red。
+7. **原地升级必须签名**（自更新命脉）。Swift 链接器只给 binary 一个 linker-signed 签名，
+   Info.plist 没绑、resources 没封印。**全新安装能跑，但同一路径整包替换后下一次启动会被
+   macOS 打死**：`SIGKILL (Code Signature Invalid)` / CODESIGNING `Launch Constraint Violation`，
+   接着 launchd 卡在 `job state = spawn failed`、`last exit code = 78 (EX_CONFIG)`——而
+   `launchctl kickstart` 仍然返回 0，看起来"成功了"。所以：
+   (a) `build_and_run.sh` 组装完 bundle **最后一步**做 ad-hoc 签名（之后不准再改动 bundle）；
+   (b) **绝不给"已安装 + 已注册"的副本补签**——补签会让它和 launchd/BTM 注册对不上，
+   变成每次 spawn 都 EX_CONFIG（踩过，只能 bootout 重注册才能救回来）；
+   (c) `autostart.sh` 起完必须 pgrep 确认，没起来就 bootout + 重新 bootstrap。
+   **但 bootout 会杀光该 job 里的所有进程，自更新时这个脚本自己就在里面**（App 用
+   `nohup bash /tmp/asb-update.sh &` 拉起，继承了 `XPC_SERVICE_NAME=<label>`）——所以脚本靠
+   `XPC_SERVICE_NAME != $LABEL` 判断"不是自更新上下文"才敢 bootout，自更新场景退到 `open` 兜底。
 
 ## 发版 / 分发
 - `VERSION` 文件是**版本单一来源**。App 每小时比对远端 `raw.githubusercontent.com/.../VERSION`

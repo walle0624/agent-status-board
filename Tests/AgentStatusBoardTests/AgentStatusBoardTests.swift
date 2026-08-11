@@ -139,6 +139,57 @@ private func sessionNames(_ map: [String: String]) throws -> SessionNames {
     #expect(!SessionEventCollector.isHiddenThreadMeta(#"{"base_instructions":{"text":"spawn a subagent for automation"},"thread_source":"user"}"#))
 }
 
+@Test func rowAgeLabelFormat() {
+    // Fixed clock + fixed zone so the calendar branches are deterministic
+    // regardless of the machine's timezone: "now" is 2026-06-23 09:00 local.
+    var cal = Calendar(identifier: .gregorian)
+    cal.timeZone = TimeZone(identifier: "Asia/Shanghai")!
+    func at(_ month: Int, _ day: Int, _ hour: Int, _ minute: Int = 0) -> Date {
+        cal.date(from: DateComponents(year: 2026, month: month, day: day, hour: hour, minute: minute))!
+    }
+    let now = at(6, 23, 9)
+    func age(_ date: Date) -> String { DesktopWidgetView.relativeAge(date, now: now, calendar: cal) }
+
+    // Under a day: 刚刚 → whole minutes → hours+minutes.
+    #expect(age(now) == "刚刚")
+    #expect(age(now.addingTimeInterval(30)) == "刚刚")        // clock skew → never negative
+    #expect(age(now.addingTimeInterval(-59)) == "刚刚")
+    #expect(age(now.addingTimeInterval(-60)) == "1m")
+    #expect(age(now.addingTimeInterval(-3_599)) == "59m")
+    #expect(age(now.addingTimeInterval(-3_600)) == "1h0m")
+    #expect(age(now.addingTimeInterval(-5_040)) == "1h24m")
+    #expect(age(now.addingTimeInterval(-86_399)) == "23h59m") // last moment before the switch
+
+    // Yesterday, but still under 24h → stays relative (the <24h rule wins).
+    #expect(age(at(6, 22, 23)) == "10h0m")
+    // A day or more old → calendar wording instead of a huge hour count.
+    #expect(age(at(6, 22, 8)) == "昨天")                       // 25h ago, calendar-yesterday
+    #expect(age(at(6, 21, 10)) == "6-21")
+    #expect(age(at(5, 3, 14)) == "5-3")                       // no zero padding
+    #expect(age(at(1, 9, 12)) == "1-9")                       // months back, same year
+}
+
+@Test func headerDigestWording() {
+    func text(_ a: Int, _ r: Int) -> String {
+        DesktopWidgetView.digestRuns(attention: a, running: r).map(\.text).joined()
+    }
+    func tones(_ a: Int, _ r: Int) -> [DesktopWidgetView.DigestTone] {
+        DesktopWidgetView.digestRuns(attention: a, running: r).map(\.tone)
+    }
+    // Needs-you wins the headline, and carries the running count alongside it.
+    #expect(text(2, 3) == "2 待处理 · 3 运行中")
+    #expect(tones(2, 3) == [.attention, .plain, .plain, .running, .plain])
+    // Nothing running → no dangling "· 0 运行中".
+    #expect(text(1, 0) == "1 待处理")
+    #expect(tones(1, 0) == [.attention, .plain])
+    // Work in flight, nothing blocked.
+    #expect(text(0, 4) == "4 个任务执行中")
+    #expect(tones(0, 4) == [.running, .plain])
+    // Fully settled.
+    #expect(text(0, 0) == "一切就绪")
+    #expect(tones(0, 0) == [.calm])
+}
+
 @Test func updateVersionCompare() {
     #expect(UpdateChecker.isNewer("1.12", than: "1.11"))
     #expect(UpdateChecker.isNewer("1.11", than: "1.2"))   // numeric, not lexical

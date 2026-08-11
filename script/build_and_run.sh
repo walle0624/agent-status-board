@@ -66,6 +66,20 @@ if [ -f "$ICON_SRC" ]; then
   cp "$ICON_SRC" "$APP_CONTENTS/Resources/AppIcon.icns"
 fi
 
+# Ad-hoc sign the assembled bundle — must be the LAST step that touches it.
+# Swift's linker leaves the binary "linker-signed" only: Info.plist unbound and
+# no sealed resources. macOS then kills the first launch after the bundle is
+# REPLACED IN PLACE at the same path ("SIGKILL (Code Signature Invalid)" /
+# CODESIGNING Launch Constraint Violation) — i.e. exactly what an in-place
+# upgrade or a self-update does, while a fresh install works fine. Sealing the
+# bundle here (Info.plist bound + sealed resources) makes the upgraded copy
+# validate on its own. Never sign the INSTALLED copy after the fact: re-signing
+# an already-registered app invalidates its launchd/BTM registration and every
+# spawn then fails with EX_CONFIG.
+if ! codesign --force --deep --sign - "$APP_BUNDLE" 2>/dev/null; then
+  echo "warn: ad-hoc codesign failed — in-place upgrades may be killed by macOS" >&2
+fi
+
 open_app() {
   /usr/bin/open -n "$APP_BUNDLE"
 }
