@@ -190,6 +190,69 @@ private func sessionNames(_ map: [String: String]) throws -> SessionNames {
     #expect(tones(0, 0) == [.calm])
 }
 
+/// 右击「忽略，标为完成」：把 hook 写的 session 记录改成 done，其余字段一字不动。
+@Test func dismissRewritesOnlyStatusAndTimestamp() throws {
+    let dir = URL(fileURLWithPath: NSTemporaryDirectory())
+        .appendingPathComponent("asb-dismiss-\(UUID().uuidString)")
+    try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: dir) }
+
+    // A record shaped exactly like record.sh writes (whole-second timestamp),
+    // plus the `summary` classify.py adds and an unknown key a future hook might.
+    let file = dir.appendingPathComponent("claudeCode-abc.json")
+    let before = """
+    {"key":"claudeCode-abc","source":"claudeCode","status":"waitingReview",\
+    "title":"AI 工具指示灯","cwd":"/Users/walle/Game","model":"","lastTool":"Bash",\
+    "summary":"收尾时给了几条建议","updatedAt":"2026-08-01T04:00:00Z","futureField":42}
+    """
+    try before.write(to: file, atomically: true, encoding: .utf8)
+
+    let now = Date(timeIntervalSince1970: 1_787_000_000)
+    #expect(SessionDismiss.dismiss(recordPath: file.path, now: now))
+
+    let after = try #require(
+        try JSONSerialization.jsonObject(with: Data(contentsOf: file)) as? [String: Any]
+    )
+    #expect(after["status"] as? String == "done")                     // the one flip
+    #expect(after["key"] as? String == "claudeCode-abc")              // …everything else intact
+    #expect(after["source"] as? String == "claudeCode")
+    #expect(after["title"] as? String == "AI 工具指示灯")
+    #expect(after["cwd"] as? String == "/Users/walle/Game")           // not slash-escaped
+    #expect(after["model"] as? String == "")
+    #expect(after["lastTool"] as? String == "Bash")
+    #expect(after["summary"] as? String == "收尾时给了几条建议")
+    #expect(after["futureField"] as? Int == 42)                       // unknown key survives
+
+    // updatedAt is now, and still parses with the collector's own strategy.
+    let stamp = try #require(after["updatedAt"] as? String)
+    let decoder = JSONDecoder()
+    decoder.dateDecodingStrategy = .iso8601WithFractionalSeconds
+    let parsed = try decoder.decode(
+        [String: Date].self, from: Data(#"{"at":"\#(stamp)"}"#.utf8)
+    )["at"]
+    #expect(parsed.map { abs($0.timeIntervalSince(now)) < 0.01 } == true)
+    #expect(parsed! > ISO8601DateFormatter().date(from: "2026-08-01T04:00:00Z")!)
+}
+
+@Test func dismissFailsQuietlyOnBadPaths() throws {
+    let dir = URL(fileURLWithPath: NSTemporaryDirectory())
+        .appendingPathComponent("asb-dismiss-\(UUID().uuidString)")
+    try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: dir) }
+
+    #expect(!SessionDismiss.dismiss(recordPath: ""))                          // no evidence path
+    #expect(!SessionDismiss.dismiss(recordPath: dir.appendingPathComponent("nope.json").path))
+    #expect(!SessionDismiss.dismiss(recordPath: dir.path))                    // a directory
+
+    // Unparseable content is left exactly as it was rather than clobbered.
+    let junk = dir.appendingPathComponent("junk.json")
+    try "not json at all".write(to: junk, atomically: true, encoding: .utf8)
+    #expect(!SessionDismiss.dismiss(recordPath: junk.path))
+    #expect(try String(contentsOf: junk, encoding: .utf8) == "not json at all")
+    // …and no temp file is left behind next to it.
+    #expect(try FileManager.default.contentsOfDirectory(atPath: dir.path).count == 1)
+}
+
 @Test func updateVersionCompare() {
     #expect(UpdateChecker.isNewer("1.12", than: "1.11"))
     #expect(UpdateChecker.isNewer("1.11", than: "1.2"))   // numeric, not lexical

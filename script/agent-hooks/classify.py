@@ -153,9 +153,16 @@ def codex_transcript_tail(sid, limit=9000):
 
 SYSTEM = (
     "You inspect the tail of a coding-assistant session transcript and report its state. "
-    "Decide needs_input: true ONLY if the assistant has stopped and is genuinely waiting for "
-    "the user to answer a question, approve something, or decide a next step before work can "
-    "continue; false if the task is finished or nothing is required from the user. "
+    "Decide needs_input: true ONLY if the assistant is BLOCKED waiting on the user — it asked the "
+    "user a question that must be answered, or requested authorization / confirmation / a choice "
+    "between options, and cannot continue until the user replies. "
+    "needs_input is false whenever the assistant merely stopped, in particular in these cases: "
+    "(1) the task is done and it gave a summary or a report of the result; "
+    "(2) the ending carries recommendations or next-step ideas — 「建议你…」「你可以考虑…」"
+    "「后续可以…」/ \"you may want to\", \"consider\", \"next you could\"; "
+    "(3) a polite sign-off — 「还需要什么随时说」/ \"let me know if you need anything else\"; "
+    "(4) it stated its conclusion and stopped writing. "
+    "Offering advice is NOT asking a question. If you are unsure, answer false. "
     "Also write summary: one short line (<=80 chars, in the transcript's main language) of what "
     "happened and, if needs_input, what it is waiting for. "
     'Reply with ONLY a JSON object: {"needs_input": true|false, "summary": "..."}. No prose, no code fences.'

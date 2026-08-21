@@ -74,8 +74,12 @@ struct DesktopWidgetView: View {
     @State private var updating = false
 
     private var snapshot: AgentSnapshot { store.snapshot }
+    /// The statuses that put a row in the red "needs you" block — and the only
+    /// ones that may be dismissed by hand. Named once so the block and its
+    /// context menu can't drift apart.
+    static let attentionStatuses: Set<AgentTaskStatus> = [.waitingReview, .blocked, .failed, .stale]
     private var attention: [AgentTask] {
-        snapshot.visibleTasks.filter { [.waitingReview, .blocked, .failed, .stale].contains($0.status) }
+        snapshot.visibleTasks.filter { Self.attentionStatuses.contains($0.status) }
     }
     private var running: [AgentTask] {
         snapshot.visibleTasks.filter { $0.status == .running || $0.status == .thinking }
@@ -334,9 +338,12 @@ struct DesktopWidgetView: View {
     /// One session row: dot, title · source, a detail line, how long ago it was
     /// last active, and a chevron. The whole row opens the owning app/session on
     /// click; the workspace path lives in the tooltip instead of on screen.
+    /// A needs-you row additionally right-clicks to 「忽略，标为完成」 — the red
+    /// verdict comes partly from an LLM and is sometimes wrong (a session that
+    /// just ended with suggestions), and the board should never be stuck red.
     @ViewBuilder
     private func sessionRow(_ task: AgentTask, color: Color, detail: String, detailLines: Int) -> some View {
-        ClickableRow(onTap: { onOpen(task) }) {
+        let row = ClickableRow(onTap: { onOpen(task) }) {
             HStack(alignment: .top, spacing: 8) {
                 // +1pt past the arithmetic center: optically the dot reads as
                 // sitting on the title's midline rather than above it.
@@ -363,6 +370,26 @@ struct DesktopWidgetView: View {
             }
         }
         .help(task.workspace ?? "")
+
+        // Only needs-you rows carry the menu; attaching it unconditionally would
+        // give running / finished rows an empty context menu.
+        if Self.attentionStatuses.contains(task.status) {
+            row.contextMenu { dismissMenuItem(task) }
+        } else {
+            row
+        }
+    }
+
+    /// 「忽略，标为完成」— writes `done` into the session's own state file and
+    /// refreshes, so the row leaves the red block immediately instead of waiting
+    /// for a hook that may never fire again.
+    private func dismissMenuItem(_ task: AgentTask) -> some View {
+        Button {
+            guard SessionDismiss.dismiss(recordPath: task.evidence) else { return }
+            Task { await store.refresh() }
+        } label: {
+            Label("忽略，标为完成", systemImage: "checkmark.circle")
+        }
     }
 
     /// The one section-header style, shared by 正在执行 / 最近完成 / 余量 so the
