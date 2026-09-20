@@ -89,6 +89,10 @@ struct SessionEventCollector: TaskCollecting {
             // the listing failed, so we fail open (show).
             switch source {
             case .claudeCode:
+                // Hide headless `claude -p` runs started by launchd (scheduled
+                // jobs, not sessions the user is sitting in) — same philosophy
+                // as the Codex automation hiding below.
+                if Self.ccIsHidden(cwd: record.cwd) { continue }
                 if !liveCC.isEmpty, rawId.isEmpty || liveCC[rawId] == nil { continue }
             case .codex:
                 if !liveCodex.isEmpty {
@@ -260,6 +264,17 @@ struct SessionEventCollector: TaskCollecting {
         if let p = pendingSince, now.timeIntervalSince(p) > pendingApprovalAfter { return .waitingReview }
         if let idle = idleSince, now.timeIntervalSince(idle) > idleAfter { return .done }
         return status
+    }
+
+    /// Whether a Claude Code session is a background / scheduled run the user
+    /// doesn't want on the board. A headless `claude -p` launched by a launchd
+    /// timer inherits launchd's working directory — `/` — which no interactive
+    /// session ever has (you start CC inside a project). That single, narrow
+    /// signal is the whole rule: anything else (a real path, or an empty cwd
+    /// from an older/partial hook write) fails open and is shown, so a real
+    /// session is never hidden by mistake.
+    static func ccIsHidden(cwd: String) -> Bool {
+        cwd == "/"
     }
 
     /// Rollout URLs of Codex sessions still under ~/.codex/sessions/, keyed by

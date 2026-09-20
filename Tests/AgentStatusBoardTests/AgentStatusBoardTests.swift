@@ -139,6 +139,18 @@ private func sessionNames(_ map: [String: String]) throws -> SessionNames {
     #expect(!SessionEventCollector.isHiddenThreadMeta(#"{"base_instructions":{"text":"spawn a subagent for automation"},"thread_source":"user"}"#))
 }
 
+@Test func hidesHeadlessLaunchdClaudeSessions() {
+    // A `claude -p` run started by a launchd timer inherits launchd's working
+    // directory ("/"), so it lands on the board as a meaningless "CC 会话".
+    // Hidden on purpose — same philosophy as the Codex automation hiding.
+    #expect(SessionEventCollector.ccIsHidden(cwd: "/"))
+    // Everything else is shown: the rule is deliberately narrow so a real
+    // session is never hidden by mistake (fail-open).
+    #expect(!SessionEventCollector.ccIsHidden(cwd: "/Users/walle/Game"))
+    #expect(!SessionEventCollector.ccIsHidden(cwd: ""))      // older/partial hook write
+    #expect(!SessionEventCollector.ccIsHidden(cwd: "/tmp"))
+}
+
 @Test func rowAgeLabelFormat() {
     // Fixed clock + fixed zone so the calendar branches are deterministic
     // regardless of the machine's timezone: "now" is 2026-06-23 09:00 local.

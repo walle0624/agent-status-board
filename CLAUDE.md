@@ -4,7 +4,7 @@ macOS 菜单栏水球 + 桌面悬浮窗，实时显示 Codex / Claude Code (CC) 
 需处理 / 已完成）和 5h/周用量**余额**。原生 Swift（SwiftUI + AppKit），Swift Package
 Manager，LSUIElement（无 Dock 图标）。以**源码**分发，各自本机编译 + 通过 GitHub 自更新。
 
-当前已发布版本：**v1.30**（每版"为什么"见 `CHANGELOG.md`）。
+当前已发布版本：**v1.31**（每版"为什么"见 `CHANGELOG.md`）。
 
 > **维护须知**：这份文件是本项目的"活文档"，会话进入此文件夹会自动加载它。凡是改动了
 > 编译 / 发版流程、关键约定或踩坑经验（包括上面的版本号），都要顺手同步更新这份 `CLAUDE.md`，
@@ -46,9 +46,12 @@ Hook 脚本写状态、Swift App 读状态。
 3. **"正在执行"以 transcript 为准、不信 hook 记录**。goal / 自动模式自主连跑会停止触发 CC hook、
    事件记录会冻结。`refinedStatus()` 用 transcript 信号：助手回合答完静置 >60s → 完成；tool_use
    挂起 >90s → 需处理（红）。保留 / 老化按 transcript 真实活动时间算，不按（可能冻结的）hook 时间。
-4. **定时 / 自动化 Codex 会话会被隐藏**（`codexIsAutomation`）：它们 rollout 的 `session_meta`
+4. **定时 / 自动化 Codex 会话会被隐藏**（`codexIsHidden`）：它们 rollout 的 `session_meta`
    带 `thread_source: "automation"`（交互会话是 `"user"`）。**这是用户特意要的**（不想在看板上
-   看到每日 sync/backup 定时任务）——别"修回来"。
+   看到每日 sync/backup 定时任务）——别"修回来"。**CC 侧同理**：launchd 定时任务用 `claude -p`
+   起的无头会话，继承 launchd 的工作目录 `/`（交互会话永远在某个项目目录里），记录 cwd 为
+   `"/"` 的会被 `ccIsHidden` 隐藏——同样是用户特意要的，别"修回来"。规则**故意只认 `/` 这一条**，
+   其它路径（含空 cwd）一律 fail-open 照常显示，绝不误隐真实会话。
 5. **用量·Codex**：优先实时 `wham/usage`；抓取偶发失败时**保留上次实时值、不要退回本地 rollout
    快照**（快照数字不一样、偏低）。`wham/usage` ≠ rollout 的 `token_count`，是两个不同指标。
 6. 菜单栏水球显示 5h **余量**（100 − used），随消耗 green→amber→red。
