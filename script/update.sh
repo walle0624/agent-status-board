@@ -36,7 +36,7 @@ if [ "$CHECK" = 1 ]; then
   exit 0
 fi
 
-echo "本地 $LOCAL_VER → 远端 $REMOTE_VER；下载最新源码…"
+echo "本地 $LOCAL_VER → 远端 ${REMOTE_VER}；下载最新源码…"
 TMP="$(mktemp -d)"; trap 'rm -rf "$TMP"' EXIT
 curl -fsSL "https://codeload.github.com/$OWNER/$REPO/zip/refs/heads/$BRANCH" -o "$TMP/src.zip"
 /usr/bin/ditto -x -k "$TMP/src.zip" "$TMP/x"

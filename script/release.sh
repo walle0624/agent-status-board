@@ -80,6 +80,6 @@ if [ -x "$GH" ]; then
   "$GH" release create "$TAG" --title "$TAG" --notes-file "$NOTES" >/dev/null \
     && echo "✅ 已发布 + 建 Release：$("$GH" release view "$TAG" --json url -q .url 2>/dev/null)"
 else
-  echo "✅ 已 push tag $TAG（未找到 gh，跳过 GitHub Release）"
+  echo "✅ 已 push tag ${TAG}（未找到 gh，跳过 GitHub Release）"
 fi
 echo "（装了的人会在下次检查/重启时收到更新提示）"

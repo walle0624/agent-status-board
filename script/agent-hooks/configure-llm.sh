@@ -11,7 +11,7 @@ CFG="$BASE/classify.json"
 mkdir -p "$BASE"
 
 if [ ! -t 0 ]; then
-  echo "configure-llm: 需在终端交互运行。也可手写 $CFG："
+  echo "configure-llm: 需在终端交互运行。也可手写 ${CFG}："
   echo '  {"provider":"openai","base_url":"https://host/v1","api_key":"sk-...","model":"..."}'
   exit 0
 fi

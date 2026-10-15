@@ -34,7 +34,7 @@ if ! git -C "$ROOT" fetch -q "https://github.com/$REPO" "pull/$N/head:$BR"; then
 fi
 git -C "$ROOT" worktree add -q "$WT" "$BR"
 
-echo; echo "──── 功能检查（隔离 worktree: $WT）────"
+echo; echo "──── 功能检查（隔离 worktree: ${WT}）────"
 ( cd "$WT" && swift build && swift test ) && echo "✅ 编译 + 测试 通过" || echo "⚠️ 编译/测试 有问题（见上）"
 
 echo; echo "──── 改动（相对 main）────"

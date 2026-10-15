@@ -18,6 +18,9 @@ Agent Status Board —— macOS 桌面悬浮组件 + 菜单栏指示灯，实时
   从 git clone 安装的(开发机上就是开发仓库本身)会因此丢掉所有未提交改动、未跟踪和被忽略的文件。现在安装目录
   是 git 检出时照常重装 App、刷新 hook 脚本,源码一字不动(请用 `git pull` 自行更新);zip 安装不变。
   点更新时运行的是安装目录里的 `update.sh`,所以 git 检出请先 `git pull` 拿到这一版再点更新。
+- **修复:在 UTF-8 终端里手动跑 `update.sh` 会报 unbound variable 直接退出**。macOS 自带的 bash 3.2 会把紧跟在
+  变量后面的全角标点(如 `$REMOTE_VER；`)算进变量名,配合 `set -u` 就崩;App 内更新不设 locale,不受影响。
+  `update.sh`、`release.sh`、`review-pr.sh`、`configure-llm.sh` 里这类写法都改成了 `${变量}`。
 
 ## v1.32
 - **修复:重跑 `install.sh` 会把 `~/.codex/config.toml` 改坏,Codex 报 `duplicate key` 起不来**。
