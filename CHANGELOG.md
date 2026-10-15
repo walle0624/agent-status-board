@@ -6,6 +6,26 @@ Agent Status Board —— macOS 桌面悬浮组件 + 菜单栏指示灯，实时
 
 ---
 
+## v1.32
+- **修复:重跑 `install.sh` 会把 `~/.codex/config.toml` 改坏,Codex 报 `duplicate key` 起不来**。
+  安装脚本用逐行正则判断"是否已接入",认不出 Codex 自己改写过的配置:①Codex Computer Use 会把
+  `notify` 改成多行数组,并用 `--previous-notify '["\/…\/codex-notify.sh"]'` 串上状态板——脚本没认出来,
+  又在文件头插了第二个 `notify`(重复键);②Codex 保存时会把 hook 命令改成双引号、丢掉
+  `# >>> agent-status-board hooks >>>` 标记——脚本按单引号匹配,判成"未接入",再追加一整套 hooks
+  (每个事件触发两次,第二套还没信任);③抢救 `[hooks.state]` 信任表时没有结束标记就一直截到文件尾,
+  把其后的 `[shell_environment_policy]`、`[mcp_servers.*]` 等表又复制了一遍(重复表)。
+  现在按 TOML 结构读取配置(新增 `script/agent-hooks/codex_toml.py`,兼容 macOS 自带 Python 3.9):
+  引号、标记、多行都不影响"已接入"判断;notify 里任何位置出现 `codex-notify.sh` 即算已接入、绝不替换
+  (替换会形成 codex-notify.sh ↔ Computer Use 死循环);缺什么只**追加**什么,不再删除重建,
+  `[hooks.state]` 与其它表原地不动;配置本身已不合法时不碰它、只提示用备份还原;写入前再自检一遍。
+- **修复:`uninstall.sh` 同样认不出多行 notify**,还原时会再插一个 `notify`(重复键)。现在 Computer Use
+  串着状态板时只摘掉状态板这一环(Computer Use 自己的 notify 保留,安装时替换掉的原 notify 接回去);
+  不是状态板的 notify 不碰。
+- 自更新从不碰 `config.toml`,以上只影响手动(重)跑安装 / 卸载脚本。若你用 v1.31 及更早版本重跑过
+  `install.sh`:Codex 报 `duplicate key` → 用同目录下改动前的 `config.toml.bak.<时间戳>` 还原;
+  Codex「钩子」设置里每个事件出现两条状态板 hook → 删掉 `config.toml` 里多出来的那一套
+  (带 `# >>> agent-status-board hooks >>>` 标记、命令用单引号的那段)。
+
 ## v1.31
 - **隐藏 launchd 无头 CC 会话**。用 launchd 定时跑 `claude -p` 的无头会话会继承 launchd 的
   工作目录 `/`,在看板上显示为一堆无意义的"CC 会话"(每天清晨挤满"最近完成")。现在记录

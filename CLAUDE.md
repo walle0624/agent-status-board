@@ -67,6 +67,13 @@ Hook 脚本写状态、Swift App 读状态。
    **但 bootout 会杀光该 job 里的所有进程，自更新时这个脚本自己就在里面**（App 用
    `nohup bash /tmp/asb-update.sh &` 拉起，继承了 `XPC_SERVICE_NAME=<label>`）——所以脚本靠
    `XPC_SERVICE_NAME != $LABEL` 判断"不是自更新上下文"才敢 bootout，自更新场景退到 `open` 兜底。
+8. **改 `~/.codex/config.toml` 必须按 TOML 结构读、只追加缺失项**（`script/agent-hooks/codex_toml.py`）。
+   Codex 保存时会把字符串改成双引号、丢掉注释（包括我们的 `# >>> agent-status-board hooks >>>` 标记）；
+   Computer Use 会把 `notify` 改成多行数组，用 `--previous-notify '["\/…\/codex-notify.sh"]'` 串上我们。
+   逐行正则认不出这些，曾插出第二个 `notify`、复制整段表 → `duplicate key`，Codex 起不来（2026-10-15）。
+   所以：已接入（与引号/标记无关；notify 值里任何位置有 `codex-notify.sh` 就算，**绝不替换**，否则
+   codex-notify.sh ↔ Computer Use 死循环）就一字不改；缺什么只追加什么，不删不搬（`[hooks.state]`
+   信任按位置记）；配置已不合法就不碰。改安装 / 卸载脚本后跑 `python3 script/tests/test_codex_config.py`。
 
 ## 发版 / 分发
 - `VERSION` 文件是**版本单一来源**。App 每小时比对远端 `raw.githubusercontent.com/.../VERSION`

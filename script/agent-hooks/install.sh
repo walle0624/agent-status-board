@@ -63,79 +63,93 @@ PY
 
 # 3) wire Codex official hooks (~/.codex/config.toml) — the real-time signal.
 #    IDEMPOTENT & TRUST-PRESERVING. Codex records hook trust as a `trusted_hash`
-#    per hook in a [hooks.state] table written INSIDE config.toml — and it lands
-#    inside our marker block. The old code deleted that block on every run, so it
-#    wiped Codex's trust and forced you to re-approve all 7 hooks each time.
-#    Now: if the hooks are already wired we change NOTHING; and when we must
-#    rewire, we rescue [hooks.state] and re-attach it OUTSIDE the block.
+#    per hook (keyed by its position) in a [hooks.state] table inside
+#    config.toml. So if everything is already wired we change NOTHING, and
+#    otherwise we only ADD what's missing — existing hooks, [hooks.state] and
+#    every other table stay exactly where they are (nothing to rescue/re-add).
+#    "Already wired" must survive Codex's own rewrites: it re-saves the file
+#    with "double quotes" and drops our marker comments, and Computer Use turns
+#    `notify` into a multi-line array that chains codex-notify.sh. Line regexes
+#    missed both and appended a second notify / a second set of hooks, which
+#    Codex refused to load (duplicate key). codex_toml.py reads it as TOML.
 CODEX_CFG="$HOME/.codex/config.toml"
 CODEX_HOOK="$BIN_DIR/codex-hook.sh"
 if [ -f "$CODEX_CFG" ]; then
-  python3 - "$CODEX_CFG" "$CODEX_HOOK" <<'PY'
-import re, sys, os, time, shutil
-path, hook = sys.argv[1], sys.argv[2]
+  python3 - "$SRC_DIR" "$CODEX_CFG" "$CODEX_HOOK" <<'PY'
+import json, os, sys, time, shutil
+sys.dont_write_bytecode = True
+sys.path.insert(0, sys.argv[1])
+from codex_toml import statements, duplicates, root_key, first_table, toml_str, str_array, toml_string
+path, hook = sys.argv[2], sys.argv[3]
 txt = open(path).read()
 events = ["UserPromptSubmit","PreToolUse","PostToolUse",
           "PreCompact","PostCompact","PermissionRequest","Stop"]
-desired = [f"command = '{hook} {e}'" for e in events]
 notify_wrapper = os.path.join(os.path.dirname(hook), "codex-notify.sh")
-notify_wrapped = re.search(r'(?m)^\s*notify\s*=\s*\[[^\n]*codex-notify\.sh[^\n]*\]\s*$', txt)
-
-# Already wired → DO NOTHING. This is the fix: no rewrite means Codex's
-# [hooks.state] trust hashes survive, so you never re-approve on an update.
-if all(d in txt for d in desired) and notify_wrapped:
-    print("Codex hooks 已就绪，未改动（保留信任，无需重新审核）")
-    sys.exit(0)
-
 MARK = "# >>> agent-status-board hooks >>>"
 END  = "# <<< agent-status-board hooks <<<"
 
-# Rescue Codex's [hooks.state] trust table before touching anything (it runs
-# from its header up to our END marker, or to EOF).
-state = ""
-sm = re.search(r'(?ms)^[ \t]*\[hooks\.state\b', txt)
-if sm:
-    state = txt[sm.start():].split(END, 1)[0].rstrip() + "\n"
+# Already broken (e.g. by an older install.sh)? Don't touch it — point at the backup.
+try:
+    stmts = statements(txt)
+    problem = ", ".join(duplicates(stmts)[:4])
+    problem = problem and "重复定义 " + problem
+except ValueError as e:
+    problem = str(e)
+if problem:
+    print("⚠️ %s 不是合法 TOML（%s），Codex 无法加载它；本次未改动。" % (path, problem))
+    print("   请用同目录下出问题前的 config.toml.bak.<时间戳> 还原，再重跑本脚本。")
+    sys.exit(0)
 
-# Remove our old fenced block (which may contain the state we just rescued)...
-txt = re.sub(re.escape(MARK) + r".*?" + re.escape(END) + r"\n?", "", txt, flags=re.S)
-# ...and any [hooks.state] left elsewhere (we re-add exactly one copy).
-txt = re.sub(r'(?ms)^[ \t]*\[hooks\.state\b.*?(?=^\[(?!hooks\.state)|\Z)', "", txt)
+# A hook is wired if some `command` holds exactly our command string, however
+# Codex quoted it and whether or not our marker comments survived.
+commands = {toml_str(s.value) for s in stmts if s.head.strip("\"'") == "command"}
+missing = [e for e in events if f"{hook} {e}" not in commands]
+# notify is wired if codex-notify.sh appears anywhere in its value — including
+# Computer Use's rewrite that chains us via --previous-notify '["\/…\/codex-notify.sh"]'.
+# Never replace that one: saving it as the "original" would make an endless
+# loop codex-notify.sh → Computer Use → codex-notify.sh → …
+notify = root_key(stmts, "notify")
+notify_ok = notify is not None and "codex-notify.sh" in notify.value
 
-block = [MARK]
-for e in events:
-    block += [f"[[hooks.{e}]]", f"[[hooks.{e}.hooks]]", 'type = "command"',
-              f"command = '{hook} {e}'", "timeout = 10", ""]
-block.append(END)
-txt = txt.rstrip() + "\n\n" + "\n".join(block) + "\n"
-if state:                       # re-attach AFTER the fence so it's never swallowed again
-    txt = txt.rstrip() + "\n\n" + state
+# Already wired → DO NOTHING, so Codex's [hooks.state] trust hashes survive and
+# you never re-approve on an update.
+if not missing and notify_ok:
+    print("Codex hooks 已就绪，未改动（保留信任，无需重新审核）")
+    sys.exit(0)
 
 # Wire notify too so turn-end works even before hooks are trusted. If Codex
 # already had a notify command, save it and let codex-notify.sh pass through.
-notify_re = re.compile(r'(?m)^\s*notify\s*=\s*\[[^\n]*\]\s*$')
-nm = notify_re.search(txt)
-if nm:
-    line = nm.group(0)
-    if "codex-notify.sh" not in line:
-        try:
-            import ast, json
-            original = ast.literal_eval(line.split("=", 1)[1].strip())
-            if isinstance(original, list) and original:
-                out = os.path.expanduser("~/.agent-status-board/codex-notify-original.json")
-                os.makedirs(os.path.dirname(out), exist_ok=True)
-                open(out, "w").write(json.dumps(original, indent=2))
-        except Exception:
-            pass
-        txt = txt[:nm.start()] + 'notify = ["%s"]' % notify_wrapper + txt[nm.end():]
-else:
-    m = re.search(r'(?m)^\[', txt)
-    line = 'notify = ["%s"]\n' % notify_wrapper
-    txt = (txt[:m.start()] + line + "\n" + txt[m.start():]) if m else (txt + line)
+# (Done before appending hooks: offsets in `stmts` refer to the original text.)
+if not notify_ok:
+    line = "notify = [%s]" % toml_string(notify_wrapper)
+    if notify:
+        original = str_array(notify.value)
+        if original:
+            out = os.path.expanduser("~/.agent-status-board/codex-notify-original.json")
+            os.makedirs(os.path.dirname(out), exist_ok=True)
+            open(out, "w").write(json.dumps(original, indent=2))
+        txt = txt[:notify.start] + line + txt[notify.end:]
+    else:                       # a top-level key must come before the first [table]
+        first = first_table(stmts)
+        txt = (txt[:first.start] + line + "\n\n" + txt[first.start:]) if first \
+              else txt.rstrip() + ("\n" if txt.strip() else "") + line + "\n"
 
+# Append only the missing hooks; the ones already there keep their trust.
+if missing:
+    block = [MARK]
+    for e in missing:
+        block += [f"[[hooks.{e}]]", f"[[hooks.{e}.hooks]]", 'type = "command"',
+                  "command = " + toml_string(f"{hook} {e}"), "timeout = 10", ""]
+    block.append(END)
+    txt = txt.rstrip() + "\n\n" + "\n".join(block) + "\n"
+
+if duplicates(statements(txt)):     # never write a file Codex can't load
+    print("⚠️ 接入 Codex hooks 会产生重复键，已放弃；未改动", path)
+    sys.exit(0)
 shutil.copy(path, path + ".bak." + time.strftime("%Y%m%d%H%M%S"))   # back up only when actually changing
 open(path, "w").write(txt)
-print("wired Codex hooks ->", path, "（已保留 [hooks.state] 信任表）")
+added = (["%d 个 hook" % len(missing)] if missing else []) + ([] if notify_ok else ["notify"])
+print("wired Codex hooks ->", path, "（补上 %s；已有 hooks 与信任表未动）" % " + ".join(added))
 PY
 else
   echo "skip: $CODEX_CFG not found"

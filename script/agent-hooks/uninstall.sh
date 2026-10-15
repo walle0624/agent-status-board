@@ -4,6 +4,7 @@
 # cc-hook.sh entries from Claude Code settings. Leaves backups untouched.
 set -euo pipefail
 
+SRC_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 BIN_DIR="$HOME/.agent-status-board/bin"
 
 # 1) Claude Code: drop any hook entry pointing at our cc-hook.sh
@@ -38,9 +39,12 @@ CODEX_CFG="$HOME/.codex/config.toml"
 ORIG_JSON="$HOME/.agent-status-board/codex-notify-original.json"
 if [ -f "$CODEX_CFG" ]; then
   cp "$CODEX_CFG" "$CODEX_CFG.bak.$(date +%Y%m%d%H%M%S)"
-  python3 - "$CODEX_CFG" "$ORIG_JSON" "$BIN_DIR/codex-notify.sh" <<'PY'
+  python3 - "$SRC_DIR" "$CODEX_CFG" "$ORIG_JSON" "$BIN_DIR/codex-notify.sh" <<'PY'
 import json, os, re, sys
-path, orig_json, wrapper = sys.argv[1], sys.argv[2], sys.argv[3]
+sys.dont_write_bytecode = True
+sys.path.insert(0, sys.argv[1])
+from codex_toml import statements, root_key, first_table, str_array
+path, orig_json, wrapper = sys.argv[2], sys.argv[3], sys.argv[4]
 txt = open(path).read()
 
 MARK = "# >>> agent-status-board hooks >>>"
@@ -61,17 +65,33 @@ try:
 except Exception:
     pass
 
-notify_re = re.compile(r'(?m)^\s*notify\s*=\s*\[[^\n]*\]\s*$')
-nm = notify_re.search(txt)
-if original:
-    line = notify_line(original)
-    if nm:
-        txt = txt[:nm.start()] + line + txt[nm.end():]
+# Read notify as TOML, not by line: Computer Use rewrites it as a multi-line
+# array (a single-line regex missed it and a second `notify` got inserted →
+# duplicate key), chaining us via --previous-notify '["\/…\/codex-notify.sh"]'.
+stmts = statements(txt)
+nm = root_key(stmts, "notify")
+args = str_array(nm.value) if nm else None
+if nm and "codex-notify.sh" in nm.value and args is None:
+    print("⚠️ Codex notify 无法解析，未改动它 ->", path)
+elif nm and "codex-notify.sh" in nm.value:
+    k = args.index("--previous-notify") if "--previous-notify" in args[:-1] else -1
+    if k > 0 and "codex-notify.sh" in args[k + 1]:
+        # Computer Use chains us. Hand back what was there before install:
+        # Computer Use's own notify we saved (as-is), the program we replaced
+        # (re-chained behind Computer Use), or just unlink us.
+        if original and os.path.basename(original[0]) == os.path.basename(args[0]):
+            args = original
+        elif original:
+            args = args[:k + 1] + [json.dumps(original)] + args[k + 2:]
+        else:
+            args = args[:k] + args[k + 2:]
     else:
-        m = re.search(r'(?m)^\[', txt)
-        txt = (txt[:m.start()] + line + "\n\n" + txt[m.start():]) if m else (txt.rstrip() + "\n" + line + "\n")
-elif nm and "codex-notify.sh" in nm.group(0):
-    txt = txt[:nm.start()] + txt[nm.end():]
+        args = original
+    txt = txt[:nm.start] + (notify_line(args) if args else "") + txt[nm.end:]
+elif not nm and original:
+    line = notify_line(original)
+    m = first_table(stmts)
+    txt = (txt[:m.start] + line + "\n\n" + txt[m.start:]) if m else (txt.rstrip() + "\n" + line + "\n")
 
 open(path,"w").write(txt)
 print("restored Codex notify ->", path)
