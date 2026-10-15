@@ -4,7 +4,7 @@ macOS 菜单栏水球 + 桌面悬浮窗，实时显示 Codex / Claude Code (CC) 
 需处理 / 已完成）和 5h/周用量**余额**。原生 Swift（SwiftUI + AppKit），Swift Package
 Manager，LSUIElement（无 Dock 图标）。以**源码**分发，各自本机编译 + 通过 GitHub 自更新。
 
-当前已发布版本：**v1.31**（每版"为什么"见 `CHANGELOG.md`）。
+当前已发布版本：**v1.32**（每版"为什么"见 `CHANGELOG.md`）。
 
 > **维护须知**：这份文件是本项目的"活文档"，会话进入此文件夹会自动加载它。凡是改动了
 > 编译 / 发版流程、关键约定或踩坑经验（包括上面的版本号），都要顺手同步更新这份 `CLAUDE.md`，
