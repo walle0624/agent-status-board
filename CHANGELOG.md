@@ -14,6 +14,10 @@ Agent Status Board —— macOS 桌面悬浮组件 + 菜单栏指示灯，实时
   `[[hooks.<事件>.hooks]]` 表和因此变空的 `[[hooks.<事件>]]`,外加那两行标记;其它表(包括别的工具挂在同一
   事件上的 hook)原样原位。配置本身已不合法时不碰它,写入前自检重复键。同一事件下排在状态板之后的 hook
   位置会前移,Codex 可能要求重新信任一次。
+- **修复:App 自更新会抹掉 git 检出里的本地改动**。自更新最后一步用 `rsync --delete` 把下载的源码盖到安装目录;
+  从 git clone 安装的(开发机上就是开发仓库本身)会因此丢掉所有未提交改动、未跟踪和被忽略的文件。现在安装目录
+  是 git 检出时照常重装 App、刷新 hook 脚本,源码一字不动(请用 `git pull` 自行更新);zip 安装不变。
+  点更新时运行的是安装目录里的 `update.sh`,所以 git 检出请先 `git pull` 拿到这一版再点更新。
 
 ## v1.32
 - **修复:重跑 `install.sh` 会把 `~/.codex/config.toml` 改坏,Codex 报 `duplicate key` 起不来**。

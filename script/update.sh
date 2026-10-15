@@ -63,5 +63,22 @@ if [ -d "$SBIN" ]; then
 fi
 
 # Refresh the local source so the next check/update is current (keep build dirs).
-/usr/bin/rsync -a --delete --exclude '.git' --exclude '.build' --exclude 'dist' "$NEWSRC" "$CHECKOUT/" 2>/dev/null || true
-echo "✅ 已更新到 $(tr -d '[:space:]' < "$CHECKOUT/VERSION" 2>/dev/null)"
+# NEVER for a git checkout: this rsync overwrites every uncommitted edit and
+# deletes untracked and ignored files. On 2026-10-15, releasing v1.32 made an
+# installed 1.31 app wipe the dev clone this way (the app compares the remote
+# VERSION with its own bundle, not with the checkout). A git checkout is
+# refreshed with git. A .git entry alone counts too, so a git that errors
+# (dubious ownership, a stale worktree link) can't fail open into the rsync.
+# The build, reinstall and hook refresh above still run for a git checkout:
+# they write only to $TMP, ~/Applications, the LaunchAgent and
+# ~/.agent-status-board/bin, never to the checkout, and they're what the user
+# clicked 更新 for. Skipping them would leave the banner up, with the button
+# stuck on "更新中…" because the app never restarts. A git-cloned install
+# could then never update from the app.
+if [ -e "$CHECKOUT/.git" ] || git -C "$CHECKOUT" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+  echo "源码未刷新：$CHECKOUT 是 git 检出，本地改动原样保留；源码请用 git 自行更新。"
+  echo "✅ 已更新到 $(tr -d '[:space:]' < "${NEWSRC}VERSION" 2>/dev/null)"
+else
+  /usr/bin/rsync -a --delete --exclude '.git' --exclude '.build' --exclude 'dist' "$NEWSRC" "$CHECKOUT/" 2>/dev/null || true
+  echo "✅ 已更新到 $(tr -d '[:space:]' < "$CHECKOUT/VERSION" 2>/dev/null)"
+fi

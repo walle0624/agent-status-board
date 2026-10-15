@@ -1,0 +1,205 @@
+#!/usr/bin/env python3
+"""Offline regression suite: the in-app self-update (script/update.sh) never rewrites a git checkout.
+
+On 2026-10-15 a release made the installed app self-update, and update.sh rsynced
+the downloaded main over the dev clone with --delete: every uncommitted edit and
+every untracked and ignored file was lost. Each test runs a temp copy of update.sh
+the way UpdateChecker does, against a temp checkout with a throwaway HOME. curl is
+a stub. It serves a local zip of a fake release (built with `git archive`, as
+GitHub builds it). That release's build_and_run.sh / autostart.sh only log that
+they ran: no network, no swift build, no launchctl. Set UPDATE_SH=/path/to/update.sh
+to run the suite against another copy of the script.
+"""
+import os
+import shutil
+import stat
+import subprocess
+import tempfile
+import unittest
+from pathlib import Path
+
+UPDATE = Path(os.environ.get("UPDATE_SH") or Path(__file__).resolve().parents[1] / "update.sh")
+OWNER, REPO = "example", "agent-status-board"
+VERSION_URL = f"https://raw.githubusercontent.com/{OWNER}/{REPO}/main/VERSION"
+ZIP_URL = f"https://codeload.github.com/{OWNER}/{REPO}/zip/refs/heads/main"
+SKIPPED = "源码未刷新"
+SOURCE_JSON = '{"owner": "%s", "repo": "%s", "branch": "main"}\n' % (OWNER, REPO)
+FAKE_CURL = r'''#!/bin/bash
+# Stub curl: serves VERSION and the source zip from local fixtures, nothing else.
+out="" url=""
+while [ $# -gt 0 ]; do
+  case "$1" in
+    -o) out="$2"; shift ;;
+    -*) ;;
+    *) url="$1" ;;
+  esac
+  shift
+done
+echo "curl $url" >> "$FAKE_LOG"
+case "$url" in
+  */VERSION) cat "$FAKE_NEW/VERSION" ;;
+  */zip/refs/heads/*) cp "$FAKE_ZIP" "$out" ;;
+  *) exit 22 ;;
+esac
+'''
+LOGGER = '#!/bin/bash\necho "%s $*" >> "$FAKE_LOG"\n'
+RELEASE = {   # what the downloaded main contains
+    "VERSION": "1.32\n",
+    "update-source.json": SOURCE_JSON,
+    "Package.swift": "// swift-tools-version:5.9\n",
+    "Sources/App.swift": "// released in 1.32\n",
+    "docs/guide.md": "released guide\n",
+    "script/build_and_run.sh": LOGGER % "build",
+    "script/agent-hooks/autostart.sh": LOGGER % "autostart",
+    "script/agent-hooks/record.sh": "#!/bin/bash\n# record.sh 1.32\n",
+}
+COMMITTED = {   # the dev clone at its last commit
+    "VERSION": "1.31\n",
+    "update-source.json": SOURCE_JSON,
+    "Package.swift": "// swift-tools-version:5.9\n",
+    ".gitignore": "PROJECT_MEMORY.md\n.build/\ndist/\n",
+    "Sources/App.swift": "// committed in 1.31\n",
+    "docs/guide.md": "committed guide\n",
+}
+
+
+class SelfUpdateTests(unittest.TestCase):
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        self.root = Path(self._tmp.name).resolve()     # /var -> /private/var, as git sees it
+        self.home, self.log = self.root / "home", self.root / "fake.log"
+        (self.root / "tmp").mkdir()
+        # The app starts the updater from launchd, with no LANG/LC_*: match that.
+        env = {k: v for k, v in os.environ.items()
+               if not k.startswith(("GIT_", "LANG", "LC_")) and "proxy" not in k.lower()}
+        env.update(HOME=str(self.home), TMPDIR=str(self.root / "tmp"),
+                   PATH=f"{self.root / 'stubs'}:{os.environ['PATH']}",
+                   FAKE_LOG=str(self.log), FAKE_NEW=str(self.root / "new"),
+                   FAKE_ZIP=str(self.root / "src.zip"),
+                   GIT_CONFIG_NOSYSTEM="1", GIT_CONFIG_GLOBAL="/dev/null",
+                   GIT_CEILING_DIRECTORIES=str(self.root),
+                   GIT_AUTHOR_NAME="test", GIT_AUTHOR_EMAIL="test@example.invalid",
+                   GIT_COMMITTER_NAME="test", GIT_COMMITTER_EMAIL="test@example.invalid",
+                   # git archive stamps the commit time on every file. With a fixed time the
+                   # release never shares a size+mtime with a fixture file (rsync would skip it).
+                   GIT_AUTHOR_DATE="2026-10-15T15:04:56+08:00", GIT_COMMITTER_DATE="2026-10-15T15:04:56+08:00")
+        # If a real curl ever ran, it would fail here instead of reaching GitHub.
+        env.update(dict.fromkeys(["http_proxy", "https_proxy", "HTTPS_PROXY", "all_proxy", "ALL_PROXY"],
+                                 "http://127.0.0.1:9"))
+        self.env = env
+        self.make_tree(self.root / "stubs", {"curl": FAKE_CURL})
+        self.repo(self.root / "new", RELEASE)
+        self.git(self.root / "new", "archive", "--format=zip", f"--prefix={REPO}-main/",
+                 "-o", str(self.root / "src.zip"), "HEAD")
+        self.make_tree(self.home / ".agent-status-board/bin", {"record.sh": "#!/bin/bash\n# record.sh 1.31\n"})
+
+    def tearDown(self):
+        self._tmp.cleanup()
+
+    # --- helpers --------------------------------------------------------------
+    def make_tree(self, root, files):
+        for rel, text in files.items():
+            p = root / rel
+            p.parent.mkdir(parents=True, exist_ok=True)
+            p.write_text(text)
+            if text.startswith("#!"):
+                p.chmod(0o755)
+
+    def git(self, cwd, *args):
+        return subprocess.run(["git", "-C", str(cwd), *args], env=self.env, check=True,
+                              stdout=subprocess.PIPE, text=True).stdout
+
+    def repo(self, root, files):
+        self.make_tree(root, files)
+        self.git(root, "init", "-q")
+        self.git(root, "add", "-A")
+        self.git(root, "commit", "-qm", "fixture")
+
+    def files(self, root, skip=(".git",)):
+        """{path: (bytes, mode, mtime_ns)} for every file under root, minus top-level dirs in skip."""
+        out = {}
+        for p in sorted(root.rglob("*")):
+            rel = p.relative_to(root)
+            if p.is_file() and rel.parts[0] not in skip:
+                st = p.stat()
+                out[str(rel)] = (p.read_bytes(), stat.S_IMODE(st.st_mode), st.st_mtime_ns)
+        return out
+
+    def state(self, checkout):
+        """Every file outside .git, plus git's view: HEAD, the index, status with ignored files."""
+        return (self.files(checkout), self.git(checkout, "rev-parse", "HEAD"),
+                self.git(checkout, "ls-files", "--stage"),
+                self.git(checkout, "status", "--porcelain", "--ignored", "--untracked-files=all"))
+
+    def update(self, checkout):
+        script = self.root / "asb-update.sh"     # UpdateChecker runs a temp copy, passing the checkout
+        shutil.copy(UPDATE, script)
+        result = subprocess.run(["/bin/bash", str(script), str(checkout)], stdin=subprocess.DEVNULL,
+                                stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                                env=self.env, encoding="utf-8", timeout=120)
+        self.assertEqual(result.returncode, 0, result.stdout)
+        self.assertIn("✅ 已更新到 1.32", result.stdout)
+        return result.stdout
+
+    def assert_installed(self):
+        """The release was fetched from the stub, built, installed, and its hook copies refreshed."""
+        self.assertEqual(self.log.read_text().splitlines(),
+                         [f"curl {VERSION_URL}", f"curl {ZIP_URL}", "build package", "autostart on"])
+        self.assertEqual((self.home / ".agent-status-board/bin/record.sh").read_text(),
+                         RELEASE["script/agent-hooks/record.sh"])
+
+    # --- tests ----------------------------------------------------------------
+    def test_dirty_git_checkout_survives(self):
+        checkout = self.root / "AgentStatusBoard"
+        self.repo(checkout, COMMITTED)
+        (checkout / "Sources/App.swift").write_text("// uncommitted edit\n")
+        self.make_tree(checkout, {"Sources/Staged.swift": "// staged, not committed\n",
+                                  "Tests/NewTests.swift": "// untracked\n",
+                                  "PROJECT_MEMORY.md": "ignored local memory\n"})
+        self.git(checkout, "add", "Sources/Staged.swift")
+        (checkout / "docs/guide.md").unlink()     # the release still has it
+        before = self.state(checkout)
+        for line in (" M Sources/App.swift", "A  Sources/Staged.swift", " D docs/guide.md",
+                     "?? Tests/NewTests.swift", "!! PROJECT_MEMORY.md"):
+            self.assertIn(line, before[3].splitlines())
+
+        out = self.update(checkout)
+        self.assertEqual(self.state(checkout), before)
+        self.assertIn(SKIPPED, out)
+        self.assert_installed()
+
+    def test_checkout_inside_another_work_tree_survives(self):
+        # No .git of its own: only `git rev-parse --is-inside-work-tree` can tell.
+        outer = self.root / "dotfiles"
+        self.repo(outer, {"README.md": "outer repo\n"})
+        checkout = outer / "tools/agent-status-board"
+        self.make_tree(checkout, {"VERSION": "1.31\n", "update-source.json": SOURCE_JSON,
+                                  "Package.swift": "// swift-tools-version:5.9\n",
+                                  "Sources/App.swift": "// local edit\n", "notes.md": "local only\n"})
+        before = self.state(checkout)
+
+        out = self.update(checkout)
+        self.assertEqual(self.state(checkout), before)
+        self.assertIn(SKIPPED, out)
+        self.assert_installed()
+
+    def test_zip_install_is_still_refreshed(self):
+        checkout = self.root / "agent-status-board"
+        self.make_tree(checkout, {"VERSION": "1.31\n", "update-source.json": SOURCE_JSON,
+                                  "Package.swift": "// swift-tools-version:5.9\n",
+                                  "Sources/App.swift": "// 1.31\n",
+                                  "Sources/Dropped.swift": "// removed in 1.32\n",
+                                  ".build/release/cache": "kept\n", "dist/AgentStatusBoard.app/Info.plist": "kept\n"})
+
+        self.assertNotIn(SKIPPED, self.update(checkout))
+        # Mirrors the release, stale files deleted, build dirs kept: same as before the fix.
+        def content(root, skip):
+            return {k: (data, bool(mode & 0o100)) for k, (data, mode, _) in self.files(root, skip).items()}
+        self.assertEqual(content(checkout, (".build", "dist")), content(self.root / "new", (".git",)))
+        self.assertEqual((checkout / ".build/release/cache").read_text(), "kept\n")
+        self.assertEqual((checkout / "dist/AgentStatusBoard.app/Info.plist").read_text(), "kept\n")
+        self.assert_installed()
+
+
+if __name__ == "__main__":
+    unittest.main(verbosity=2)

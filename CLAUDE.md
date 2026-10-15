@@ -74,6 +74,12 @@ Hook 脚本写状态、Swift App 读状态。
    所以：已接入（与引号/标记无关；notify 值里任何位置有 `codex-notify.sh` 就算，**绝不替换**，否则
    codex-notify.sh ↔ Computer Use 死循环）就一字不改；缺什么只追加什么，不删不搬（`[hooks.state]`
    信任按位置记）；配置已不合法就不碰。改安装 / 卸载脚本后跑 `python3 script/tests/test_codex_config.py`。
+9. **自更新绝不覆盖 git 检出的源码**（`script/update.sh`）。App 拿远端 `VERSION` 比的是**正在运行的
+   bundle 版本**，不看检出目录，所以发版、或装回旧的 `dist/` 构建，都会让本机 App 自更新；开发机上
+   `update.json` 的 `checkout` 就是本 repo。旧版末尾 `rsync -a --delete` 把下载的 main 整个盖上来：
+   2026-10-15 发 v1.32 后，未提交改动、未跟踪和被忽略的文件（新测试、`PROJECT_MEMORY.md`）全被抹掉。
+   现在检出是 git 工作树（或含 `.git`）就跳过源码刷新（源码用 git 自己更新），照常重装 App、刷新 bin
+   副本；zip 安装照旧整目录刷新。改 `update.sh` 后跑 `python3 script/tests/test_self_update.py`。
 
 ## 发版 / 分发
 - `VERSION` 文件是**版本单一来源**。App 每小时比对远端 `raw.githubusercontent.com/.../VERSION`
