@@ -34,22 +34,82 @@ print("removed Claude Code hooks ->", path)
 PY
 fi
 
-# 2) Codex: remove our hook block and restore the original notify program, if any.
+# 2) Codex: remove our hooks and restore the original notify program, if any.
 CODEX_CFG="$HOME/.codex/config.toml"
 ORIG_JSON="$HOME/.agent-status-board/codex-notify-original.json"
 if [ -f "$CODEX_CFG" ]; then
   cp "$CODEX_CFG" "$CODEX_CFG.bak.$(date +%Y%m%d%H%M%S)"
-  python3 - "$SRC_DIR" "$CODEX_CFG" "$ORIG_JSON" "$BIN_DIR/codex-notify.sh" <<'PY'
+  python3 - "$SRC_DIR" "$CODEX_CFG" "$ORIG_JSON" "$BIN_DIR/codex-notify.sh" "$BIN_DIR/codex-hook.sh" <<'PY'
 import json, os, re, sys
 sys.dont_write_bytecode = True
 sys.path.insert(0, sys.argv[1])
-from codex_toml import statements, root_key, first_table, str_array
-path, orig_json, wrapper = sys.argv[2], sys.argv[3], sys.argv[4]
+from codex_toml import statements, duplicates, root_key, first_table, str_array, table_path, toml_str
+path, orig_json, wrapper, hook = sys.argv[2], sys.argv[3], sys.argv[4], sys.argv[5]
 txt = open(path).read()
 
+# Already broken (e.g. by an older install.sh)? Don't touch it — point at the backup.
+try:
+    stmts = statements(txt)
+    problem = ", ".join(duplicates(stmts)[:4])
+    problem = problem and "重复定义 " + problem
+except ValueError as e:
+    problem = str(e)
+if problem:
+    print("⚠️ %s 不是合法 TOML（%s），Codex 无法加载它；本次未改动。" % (path, problem))
+    print("   请用同目录下出问题前的 config.toml.bak.<时间戳> 还原。")
+    sys.exit(0)
+
+# Find our hooks by their command, not by our marker comments: Codex re-saves
+# the file with "double quotes" and drops comments, and may have put its own
+# tables ([hooks.state] trust, new [mcp_servers.*]) inside the old fence.
+# Drop each [[hooks.<E>.hooks]] table whose command is ours, its [[hooks.<E>]]
+# group once nothing else is left in it, and the two marker lines; every
+# other table (other tools' hooks for the same event included) stays put.
 MARK = "# >>> agent-status-board hooks >>>"
 END = "# <<< agent-status-board hooks <<<"
-txt = re.sub(re.escape(MARK) + r".*?" + re.escape(END) + r"\n?", "", txt, flags=re.S)
+tables = []                             # [header, path, keys] in file order
+for s in stmts:
+    if s.value is None:
+        tables.append([s, table_path(s.head), []])
+    elif tables:
+        tables[-1][2].append(s)
+cur, members, ours = {}, {}, set()      # cur: event -> [its latest group, latest handler]
+for i, (h, p, keys) in enumerate(tables):
+    if len(p) < 2 or p[0] != "hooks":
+        continue
+    e, array = p[1], h.head.startswith("[[")
+    if array and len(p) == 2:           # [[hooks.E]] opens a new group
+        cur[e], members[i] = [i, None], []
+    elif e in cur:                      # a table inside the current group
+        members[cur[e][0]].append(i)
+        if array and p[2:] == ("hooks",):
+            cur[e][1] = i
+            if [toml_str(k.value) for k in keys if k.head.strip("\"'") == "command"] == [f"{hook} {e}"]:
+                ours.add(i)
+        elif p[2:3] == ("hooks",):      # a sub-table of that handler: not just ours any more
+            ours.discard(cur[e][1])
+drop = ours | {g for g, m in members.items() if m and set(m) <= ours and not tables[g][2]}
+
+BLANK = re.compile(r"(?:[ \t\r]*\n)*")
+def whole_lines(a, b):                  # the lines holding offsets a..b, plus blank lines after
+    b = txt.find("\n", b)
+    return txt.rfind("\n", 0, a) + 1, BLANK.match(txt, len(txt) if b < 0 else b + 1).end()
+cuts = []
+for i in drop:
+    h, _, keys = tables[i]
+    cuts.append(whole_lines(h.start, (keys or [h])[-1].end))
+for m in re.finditer(r"(?m)^[ \t]*(?:%s|%s)[ \t\r]*$" % (re.escape(MARK), re.escape(END)), txt):
+    if not any(s.start <= m.start() < s.end for s in stmts):   # a comment line, not inside a value
+        cuts.append(whole_lines(m.start(), m.end()))
+kept, pos = [], 0
+for a, b in sorted(cuts):
+    kept.append(txt[pos:max(pos, a)])
+    pos = max(pos, b)
+kept.append(txt[pos:])
+at_eof = bool(cuts) and pos == len(txt)
+txt = "".join(kept)
+if at_eof:                              # cut through to the end: leave no trailing blank lines
+    txt = txt.rstrip() + "\n" if txt.strip() else ""
 
 def toml_string(value):
     return json.dumps(str(value), ensure_ascii=False)
@@ -93,8 +153,15 @@ elif not nm and original:
     m = first_table(stmts)
     txt = (txt[:m.start] + line + "\n\n" + txt[m.start:]) if m else (txt.rstrip() + "\n" + line + "\n")
 
+after = statements(txt)
+if duplicates(after):                   # never write a file Codex can't load
+    print("⚠️ 卸载后会产生重复键，已放弃；未改动", path)
+    sys.exit(0)
 open(path,"w").write(txt)
-print("restored Codex notify ->", path)
+print("removed %d Codex hooks, restored notify ->" % len(ours), path)
+left = sum(hook in (s.value or "") for s in after)
+if left:
+    print("⚠️ 还有 %d 处 codex-hook.sh 不是 [[hooks.<事件>.hooks]] 写法，没有自动移除，请手动删除 ->" % left, path)
 PY
 fi
 

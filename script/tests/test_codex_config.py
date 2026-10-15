@@ -76,6 +76,10 @@ class CodexConfigTests(unittest.TestCase):
         return ('notify = [\n    "%s",\n    "turn-ended",\n    "--previous-notify",\n'
                 "    '[\"%s\"]',\n]\n") % (self.sky, self.wrapper.replace("/", "\\/"))
 
+    def unchained_notify(self):
+        """What uninstall makes of chained_notify() when no original notify was saved."""
+        return 'notify = ["%s", "turn-ended"]\n' % self.sky
+
     def codex_saved_hooks(self, events=EVENTS):
         """Our hooks as Codex re-saves them: "double quotes", marker comments gone."""
         return "".join('\n[[hooks.%s]]\n\n[[hooks.%s.hooks]]\ntype = "command"\n'
@@ -241,6 +245,40 @@ class CodexConfigTests(unittest.TestCase):
         before = self.write(ROOT + 'notify = [\n  "/usr/local/bin/other",\n]\n' + TABLES)
         self.run_script(UNINSTALL)
         self.assertEqual(self.cfg.read_text(), before)
+
+    def test_uninstall_removes_hooks_codex_resaved_without_markers(self):
+        self.write(ROOT + self.chained_notify() + TABLES + self.codex_saved_hooks()
+                   + self.hooks_state() + TAIL)
+        self.assertIn("removed 7 Codex hooks", self.run_script(UNINSTALL))
+        after = self.cfg.read_text()
+        self.assertEqual(after, ROOT + self.unchained_notify() + TABLES + self.hooks_state() + TAIL)
+        self.assert_codex_loads(after)
+
+    def test_uninstall_keeps_foreign_tables_inside_the_fence(self):
+        # Codex appends new tables before a trailing comment, i.e. inside our old fence.
+        added = '\n[mcp_servers.added_later]\ncommand = "/usr/bin/true"\n'
+        self.write(ROOT + self.chained_notify() + TABLES + TAIL
+                   + self.legacy_fenced_hooks().replace(END, added + END))
+        self.assertIn("removed 7 Codex hooks", self.run_script(UNINSTALL))
+        after = self.cfg.read_text()
+        self.assertEqual(after, ROOT + self.unchained_notify() + TABLES + TAIL + self.hooks_state() + added)
+        self.assert_codex_loads(after)
+
+    def test_uninstall_keeps_other_tools_hooks_for_the_same_event(self):
+        own_group = ('\n[[hooks.Stop]]\n\n[[hooks.Stop.hooks]]\ntype = "command"\n'
+                     'command = "/opt/other/on-stop.sh"\ntimeout = 30\n')
+        shared = '\n[[hooks.PreToolUse]]\nmatcher = "Bash"\n'
+        ours = ('\n[[hooks.PreToolUse.hooks]]\ntype = "command"\ncommand = "%s PreToolUse"\n'
+                'timeout = 10\n') % self.hook
+        theirs = '\n[[hooks.PreToolUse.hooks]]\ntype = "command"\ncommand = "/opt/other/guard.sh"\n'
+        rest = self.codex_saved_hooks([e for e in EVENTS if e != "PreToolUse"])
+        self.write(ROOT + self.chained_notify() + TABLES + shared + ours + theirs + rest
+                   + own_group + self.hooks_state() + TAIL)
+        self.assertIn("removed 7 Codex hooks", self.run_script(UNINSTALL))
+        after = self.cfg.read_text()
+        self.assertEqual(after, ROOT + self.unchained_notify() + TABLES + shared + theirs
+                         + own_group + self.hooks_state() + TAIL)
+        self.assert_codex_loads(after)
 
 
 if __name__ == "__main__":

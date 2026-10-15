@@ -9,6 +9,7 @@ comments, values spanning lines inside [ ] / { } — and nothing more.
 Install-time helper only: it is not copied to ~/.agent-status-board/bin.
 """
 import json
+import re
 from collections import namedtuple
 
 # One top-level statement. start/end: offsets in the text (end excludes any
@@ -108,6 +109,15 @@ def root_key(stmts, key):
 def first_table(stmts):
     """The first [table] / [[array.table]] header statement, or None."""
     return next((s for s in stmts if s.value is None), None)
+
+
+_KEY = re.compile(r'"(?:[^"\\\n]|\\.)*"|\'[^\'\n]*\'|[^\s."\']+')
+
+
+def table_path(head):
+    """Key path of a [table] / [[array.table]] header: '[a . "b.c"]' -> ("a", "b.c")."""
+    inner = head[2:-2] if head.startswith("[[") else head[1:-1]
+    return tuple(toml_str(k) if k[0] in "\"'" else k for k in _KEY.findall(inner))
 
 
 def toml_str(tok):

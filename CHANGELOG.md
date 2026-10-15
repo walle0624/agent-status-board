@@ -6,6 +6,15 @@ Agent Status Board —— macOS 桌面悬浮组件 + 菜单栏指示灯，实时
 
 ---
 
+## v1.33
+- **修复:`uninstall.sh` 卸不掉 Codex 里的状态板 hook,还会误删别的表**。卸载只删
+  `# >>> agent-status-board hooks >>>` 两行标记之间的内容,可 Codex 保存配置时会丢掉注释——标记没了,
+  7 个 hook 就一直留着(删掉状态目录后每次触发都报错);标记还在时,又会把 Codex 插进标记之间的表
+  (`[hooks.state]` 信任表、新加的 `[mcp_servers.*]`)一起删掉。现在按 TOML 结构找:只删 command 是状态板的
+  `[[hooks.<事件>.hooks]]` 表和因此变空的 `[[hooks.<事件>]]`,外加那两行标记;其它表(包括别的工具挂在同一
+  事件上的 hook)原样原位。配置本身已不合法时不碰它,写入前自检重复键。同一事件下排在状态板之后的 hook
+  位置会前移,Codex 可能要求重新信任一次。
+
 ## v1.32
 - **修复:重跑 `install.sh` 会把 `~/.codex/config.toml` 改坏,Codex 报 `duplicate key` 起不来**。
   安装脚本用逐行正则判断"是否已接入",认不出 Codex 自己改写过的配置:①Codex Computer Use 会把
