@@ -2,6 +2,10 @@
 set -euo pipefail
 
 MODE="${1:-run}"
+case "$MODE" in
+  run|package|--debug|debug|--logs|logs|--telemetry|telemetry|--verify|verify) ;;
+  *) echo "usage: $0 [run|package|--debug|--logs|--telemetry|--verify]" >&2; exit 2 ;;
+esac
 APP_NAME="AgentStatusBoard"
 BUNDLE_ID="ai.linkingdigital.AgentStatusBoard"
 MIN_SYSTEM_VERSION="14.0"
@@ -10,16 +14,17 @@ ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 # Single source of truth for the version: the VERSION file (overridable via env).
 APP_VERSION="${APP_VERSION:-$(cat "$ROOT_DIR/VERSION" 2>/dev/null || echo 1.0)}"
 DIST_DIR="$ROOT_DIR/dist"
-APP_BUNDLE="$DIST_DIR/$APP_NAME.app"
+# Build products are hidden; ~/Applications is the only runnable installation.
+APP_BUNDLE="$ROOT_DIR/.build/packaging/$APP_NAME.app"
 APP_CONTENTS="$APP_BUNDLE/Contents"
 APP_MACOS="$APP_CONTENTS/MacOS"
 APP_BINARY="$APP_MACOS/$APP_NAME"
 INFO_PLIST="$APP_CONTENTS/Info.plist"
+INSTALLED_APP="$HOME/Applications/$APP_NAME.app"
+INSTALLED_BINARY="$INSTALLED_APP/Contents/MacOS/$APP_NAME"
 
 CONFIG="debug"
 [ "$MODE" = "package" ] && CONFIG="release"
-
-[ "$MODE" = "package" ] || pkill -x "$APP_NAME" >/dev/null 2>&1 || true
 
 cd "$ROOT_DIR"
 swift build -c "$CONFIG"
@@ -66,6 +71,13 @@ if [ -f "$ICON_SRC" ]; then
   cp "$ICON_SRC" "$APP_CONTENTS/Resources/AppIcon.icns"
 fi
 
+# Keep future updates independent of a git checkout's intentionally preserved
+# scripts. Resources must be installed before sealing the bundle below.
+if [ -f "$ROOT_DIR/script/update.sh" ]; then
+  mkdir -p "$APP_CONTENTS/Resources"
+  cp "$ROOT_DIR/script/update.sh" "$APP_CONTENTS/Resources/update.sh"
+fi
+
 # Ad-hoc sign the assembled bundle — must be the LAST step that touches it.
 # Swift's linker leaves the binary "linker-signed" only: Info.plist unbound and
 # no sealed resources. macOS then kills the first launch after the bundle is
@@ -76,12 +88,11 @@ fi
 # validate on its own. Never sign the INSTALLED copy after the fact: re-signing
 # an already-registered app invalidates its launchd/BTM registration and every
 # spawn then fails with EX_CONFIG.
-if ! codesign --force --deep --sign - "$APP_BUNDLE" 2>/dev/null; then
-  echo "warn: ad-hoc codesign failed — in-place upgrades may be killed by macOS" >&2
-fi
+codesign --force --deep --sign - "$APP_BUNDLE"
 
 open_app() {
-  /usr/bin/open -n "$APP_BUNDLE"
+  bash "$ROOT_DIR/script/agent-hooks/autostart.sh" on
+  open "$INSTALLED_APP"
 }
 
 case "$MODE" in
@@ -89,15 +100,16 @@ case "$MODE" in
     open_app
     ;;
   --debug|debug)
-    lldb -- "$APP_BINARY"
+    bash "$ROOT_DIR/script/agent-hooks/autostart.sh" install
+    lldb -- "$INSTALLED_BINARY"
     ;;
   --logs|logs)
     open_app
-    /usr/bin/log stream --info --style compact --predicate "process == \"$APP_NAME\""
+    log stream --info --style compact --predicate "process == \"$APP_NAME\""
     ;;
   --telemetry|telemetry)
     open_app
-    /usr/bin/log stream --info --style compact --predicate "subsystem == \"$BUNDLE_ID\""
+    log stream --info --style compact --predicate "subsystem == \"$BUNDLE_ID\""
     ;;
   --verify|verify)
     open_app
@@ -105,6 +117,7 @@ case "$MODE" in
     pgrep -x "$APP_NAME" >/dev/null
     ;;
   package)
+    mkdir -p "$DIST_DIR"
     ZIP="$DIST_DIR/$APP_NAME-$APP_VERSION.zip"
     rm -f "$ZIP"
     /usr/bin/ditto -c -k --sequesterRsrc --keepParent "$APP_BUNDLE" "$ZIP"

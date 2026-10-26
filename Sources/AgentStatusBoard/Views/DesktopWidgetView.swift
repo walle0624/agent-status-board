@@ -1,5 +1,6 @@
 import AppKit
 import SwiftUI
+import os
 
 /// NSVisualEffectView bridge for the liquid-glass blur behind the widget.
 struct VisualEffectView: NSViewRepresentable {
@@ -66,12 +67,12 @@ struct DesktopWidgetView: View {
     var onClose: () -> Void = {}
     var onTogglePin: () -> Void = {}
     var onOpen: (AgentTask) -> Void = { _ in }
+    var onEndDragging: () -> Void = {}
     var isPinned: Bool = true
     /// Hosted inside the menu-bar popover rather than the floating window:
     /// drop the window chrome (pin/close, drop shadow, outer margin).
     var inPopover: Bool = false
     @State private var appeared = false
-    @State private var updating = false
 
     private var snapshot: AgentSnapshot { store.snapshot }
     /// The statuses that put a row in the red "needs you" block — and the only
@@ -115,6 +116,8 @@ struct DesktopWidgetView: View {
             header
             if let v = store.availableUpdate {
                 updateBanner(v)
+            } else if store.isUpdating || store.updateError != nil {
+                updateBanner(store.updateProgress?.version ?? "")
             }
             if !attention.isEmpty {
                 attentionBlock                         // red hero: needs you
@@ -201,12 +204,17 @@ struct DesktopWidgetView: View {
             // and one line saying what that means. Only the needs-you orb moves.
             // 16pt — a step above the 10pt row LEDs to hold the hierarchy,
             // without the orb becoming the thing you look at first.
-            LEDDot(color: orbColor(st), flashing: st == .needsAttention, size: 16)
-            digest.lineLimit(1)   // header stays exactly one line, whatever the counts
+            HStack(spacing: 8) {
+                LEDDot(color: orbColor(st), flashing: st == .needsAttention, size: 16)
+                digest.lineLimit(1)   // header stays exactly one line, whatever the counts
+                Spacer(minLength: 0)
+            }
+            .frame(maxWidth: .infinity, minHeight: 22)
+            .overlay {
+                if !inPopover { WidgetDragRegion(onEndDragging: onEndDragging) }
+            }
 
-            Spacer()
-
-            Button { Task { await store.refresh() } } label: {
+            Button { Task { await store.refresh(forceUsage: true) } } label: {
                 Image(systemName: "arrow.clockwise")
                     .font(.system(size: 11, weight: .medium))
                     .foregroundStyle(Glass.textSecondary)
@@ -289,13 +297,14 @@ struct DesktopWidgetView: View {
     @ViewBuilder
     private func updateBanner(_ version: String) -> some View {
         let accent = Color(.sRGB, red: 0.40, green: 0.66, blue: 1.0)
+        let updating = store.isUpdating
         Button {
-            if !updating { updating = true; store.applyUpdate() }
+            store.applyUpdate()
         } label: {
             HStack(spacing: 8) {
                 Image(systemName: updating ? "arrow.triangle.2.circlepath" : "arrow.down.circle.fill")
                     .font(.system(size: 11))
-                Text(updating ? "更新中…（完成后自动重启）" : "有新版本 v\(version) · 点击更新")
+                Text(store.updateError ?? (updating ? (store.updateProgress?.message ?? "正在启动更新…") : "有新版本 v\(version) · 点击更新"))
                     .font(.system(size: 11, weight: .medium))
                 Spacer(minLength: 4)
                 if !updating {
@@ -565,8 +574,12 @@ struct DesktopWidgetView: View {
             if store.claudeAvailable {
                 if let u = store.claudeUsage {
                     usageProvider("CC", u)
+                    if let error = store.claudeUsageError {
+                        Text(error)
+                            .font(.system(size: 10)).foregroundStyle(Glass.amber)
+                    }
                 } else {
-                    Text("CC · 用量获取中…（首次约几秒；长期为空则检查 cc-token.json）")
+                    Text(store.claudeUsageError ?? "CC · 用量获取中…（首次约几秒；长期为空则检查 cc-token.json）")
                         .font(.system(size: 10)).foregroundStyle(Glass.textTertiary)
                 }
             }
@@ -643,6 +656,95 @@ struct DesktopWidgetView: View {
     }
 }
 
+/// Only the header's status/title area owns native window dragging. Buttons and
+/// session rows remain SwiftUI hit targets; popovers do not install this view.
+private struct WidgetDragRegion: NSViewRepresentable {
+    let onEndDragging: () -> Void
+
+    func makeNSView(context: Context) -> WidgetDragHandleView {
+        let view = WidgetDragHandleView()
+        view.toolTip = "拖动以移动组件"
+        view.onEndDragging = onEndDragging
+        return view
+    }
+
+    func updateNSView(_ nsView: WidgetDragHandleView, context: Context) {
+        nsView.onEndDragging = onEndDragging
+    }
+}
+
+final class WidgetDragHandleView: NSView {
+    var onEndDragging: () -> Void = {}
+    var leftMouseIsPressed: () -> Bool = { NSEvent.pressedMouseButtons & 1 != 0 }
+    private(set) var isDragging = false
+    private var completionTimer: Timer?
+    private var dragOrigin = NSPoint.zero
+    private var mouseOrigin = NSPoint.zero
+    private var observedPhysicalPress = false
+    private static let log = Logger(subsystem: "ai.linkingdigital.AgentStatusBoard", category: "widget")
+
+    override var mouseDownCanMoveWindow: Bool { false }
+    override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
+
+    override func resetCursorRects() {
+        addCursorRect(bounds, cursor: .openHand)
+    }
+
+    override func mouseDown(with event: NSEvent) {
+        guard let window, !isDragging else { return }
+        isDragging = true
+        dragOrigin = window.frame.origin
+        mouseOrigin = window.convertPoint(toScreen: event.locationInWindow)
+        observedPhysicalPress = leftMouseIsPressed()
+        NSCursor.closedHand.push()
+        Self.log.notice("Widget header drag started")
+        // Track AppKit mouse events directly, which works for both real and
+        // accessibility-generated input. WindowServer's performDrag returns
+        // immediately and may consume mouseUp or ignore synthetic button state.
+        let timer = Timer(timeInterval: 0.02, target: self,
+                          selector: #selector(pollForDragCompletion(_:)), userInfo: nil, repeats: true)
+        completionTimer = timer
+        RunLoop.main.add(timer, forMode: .common)
+    }
+
+    @objc private func pollForDragCompletion(_ timer: Timer) { completeDragIfMouseReleased() }
+
+    override func mouseDragged(with event: NSEvent) {
+        guard isDragging, let window else { return }
+        let mouse = window.convertPoint(toScreen: event.locationInWindow)
+        window.setFrameOrigin(NSPoint(x: dragOrigin.x + mouse.x - mouseOrigin.x,
+                                      y: dragOrigin.y + mouse.y - mouseOrigin.y))
+    }
+
+    override func mouseUp(with event: NSEvent) {
+        finishDragging(savePosition: window != nil)
+    }
+
+    func completeDragIfMouseReleased() {
+        guard isDragging else { return }
+        if leftMouseIsPressed() { observedPhysicalPress = true; return }
+        // Synthetic events need not change the hardware button bit. In that
+        // case mouseUp, not an initial zero bit, owns completion.
+        guard observedPhysicalPress else { return }
+        finishDragging(savePosition: window != nil)
+    }
+
+    override func viewWillMove(toWindow newWindow: NSWindow?) {
+        if newWindow == nil { finishDragging(savePosition: false) }
+        super.viewWillMove(toWindow: newWindow)
+    }
+
+    private func finishDragging(savePosition: Bool) {
+        guard isDragging else { return }
+        completionTimer?.invalidate()
+        completionTimer = nil
+        isDragging = false
+        NSCursor.pop()
+        Self.log.notice("Widget header drag finished")
+        if savePosition { onEndDragging() }
+    }
+}
+
 /// Neutral hide control, matching the refresh button's shape. Deliberately not
 /// a red orb any more: the header already carries one status orb, and a second
 /// red ball in the corner read as a second status rather than as a button.
@@ -679,8 +781,8 @@ private struct Hairline: View {
 }
 
 /// A full-width row that opens the owning session on click, with a subtle hover
-/// highlight and a pointing-hand cursor as the affordance. Dragging the widget
-/// still works from the header and the empty areas between rows.
+/// highlight and a pointing-hand cursor as the affordance. The header's title
+/// area supplies a separate native drag handle.
 private struct ClickableRow<Content: View>: View {
     let onTap: () -> Void
     @ViewBuilder var content: () -> Content

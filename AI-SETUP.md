@@ -42,10 +42,14 @@ swift --version                  # 需要 Swift 工具链
 ## 2. 编译 App + 开机自启
 
 ```bash
-./script/build_and_run.sh package          # 编译 release 到 dist/AgentStatusBoard.app
+./script/build_and_run.sh package          # 编译 release 到隐藏 .build/packaging，zip 在 dist/
 bash script/agent-hooks/autostart.sh on    # 安装到 ~/Applications + 写 LaunchAgent + 立即启动
 ```
 > 从源码本地编译，不会触发 Gatekeeper 拦截。完成后桌面右上角应出现深色玻璃组件、菜单栏出现一颗 LED 药丸。
+
+日常只启动 `~/Applications/AgentStatusBoard.app`。旧 `dist/AgentStatusBoard.app` 会在成功安装、
+核实身份后清理，历史 zip 保留。移动组件时拖住顶部状态/标题区域；按钮和会话行用于点击。
+点击更新后会显示下载、编译、安装阶段，失败可重试；源码编译需要时间，完成后自动重启。
 
 ---
 
@@ -118,6 +122,15 @@ bash ~/.agent-status-board/bin/cc-token-setup.sh
 - 它会跑 `claude setup-token`（在宽 PTY 里跑，避免 token 被 80 列终端换行截断），把长期 token 存到 `~/.agent-status-board/cc-token.json`（权限 600）。
 - 脚本会自动找 `claude` CLI；找不到就用 Claude 桌面端内置的 CLI。若两者都没有，提示用户安装 Claude Code（桌面端或 `npm i -g @anthropic-ai/claude-code`）。
 - token 长期有效。**若以后 CC 用量长期不更新**，重跑此脚本刷新即可。
+
+**更换账号时**：Claude 桌面端、浏览器和看板的 token 是独立状态。运行脚本后，确认授权页
+登录的是要显示用量的 Pro/Max 账号；需要时把本次完整授权链接复制到无痕窗口。
+必须保持脚本运行到显示 `ASB_CC_TOKEN_SAVED` 才算完成。若浏览器给出手动 code，
+在运行脚本的交互终端粘贴并按 Enter，输入不会显示。失败或超时不会覆盖现有 token，
+重新运行后要使用新链接，不能继续使用已停止脚本的旧 localhost 回调。
+
+看板会明确显示授权失效/无权限/网络错误。新 token 写入后在下一次约 3 秒刷新时重新查询，
+不必等待 5 分钟轮询；也可点组件的刷新按钮。账号切换时会清除旧账号用量。
 
 > **Codex 用量无需任何配置**：自动调 Codex 自己的实时用量端点（`chatgpt.com/backend-api/wham/usage`，认证读 `~/.codex/auth.json` 的登录态；失败才回退本地 rollout 快照），开箱即用。
 

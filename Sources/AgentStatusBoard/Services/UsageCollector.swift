@@ -20,6 +20,30 @@ struct ProviderUsage: Equatable, Sendable {
     let snapshotAt: Date
 }
 
+enum ClaudeUsageError: Error, Equatable, Sendable {
+    case missingToken, invalidToken, permissionDenied, rateLimited, missingWindows, network
+    case httpStatus(Int)
+
+    var message: String {
+        switch self {
+        case .missingToken: "CC · 尚未授权，请重新登录"
+        case .invalidToken: "CC · 授权已失效，请重新登录"
+        case .permissionDenied: "CC · 当前凭证无访问权限，请用新账号重新授权"
+        case .rateLimited: "CC · 用量查询受限，稍后自动重试"
+        case .missingWindows: "CC · 服务未返回用量数据，稍后重试"
+        case .network: "CC · 暂时无法连接，稍后自动重试"
+        case .httpStatus(let code): "CC · 用量请求失败（HTTP \(code)）"
+        }
+    }
+
+    var invalidatesPreviousUsage: Bool {
+        switch self {
+        case .missingToken, .invalidToken, .permissionDenied: true
+        default: false
+        }
+    }
+}
+
 /// Reads Codex's rate-limit usage from the newest rollout file. Codex logs a
 /// `token_count` event whose `payload.rate_limits` carries the 5-hour
 /// (`primary`) and weekly (`secondary`) windows with `used_percent` +
@@ -123,8 +147,8 @@ struct UsageCollector: Sendable {
     /// inference call — which an inference-scoped token CAN make. So we send a
     /// max_tokens:1 ping to /v1/messages (negligible cost) and read the headers.
     /// Token: ~/.agent-status-board/cc-token.json (from `claude setup-token`).
-    func claudeUsage() async -> ProviderUsage? {
-        guard let token = claudeToken() else { return nil }
+    func claudeUsage() async -> Result<ProviderUsage, ClaudeUsageError> {
+        guard let token = claudeToken() else { return .failure(.missingToken) }
         var req = URLRequest(url: URL(string: "https://api.anthropic.com/v1/messages")!)
         req.httpMethod = "POST"
         req.timeoutInterval = 20
@@ -135,11 +159,29 @@ struct UsageCollector: Sendable {
         req.httpBody = Data(#"{"model":"claude-haiku-4-5-20251001","max_tokens":1,"messages":[{"role":"user","content":"."}]}"#.utf8)
 
         guard let (_, resp) = try? await URLSession.shared.data(for: req),
-              let http = resp as? HTTPURLResponse else { return nil }
+              let http = resp as? HTTPURLResponse else {
+            Self.log.error("CC usage: network request failed")
+            return .failure(.network)
+        }
+        let result = Self.claudeUsageResponse(http, plan: claudePlan())
+        if case .failure = result {
+            Self.log.error("CC usage: HTTP \(http.statusCode, privacy: .public), usage unavailable")
+        }
+        return result
+    }
+
+    static func claudeUsageResponse(_ http: HTTPURLResponse, plan: String? = nil,
+                                    now: Date = Date()) -> Result<ProviderUsage, ClaudeUsageError> {
+        if http.statusCode == 401 { return .failure(.invalidToken) }
+        if http.statusCode == 403 { return .failure(.permissionDenied) }
+        guard (200..<300).contains(http.statusCode) || http.statusCode == 429 else {
+            return .failure(.httpStatus(http.statusCode))
+        }
 
         func window(_ tag: String, _ minutes: Int) -> UsageWindow? {
             guard let util = http.value(forHTTPHeaderField: "anthropic-ratelimit-unified-\(tag)-utilization").flatMap(Double.init),
-                  let reset = http.value(forHTTPHeaderField: "anthropic-ratelimit-unified-\(tag)-reset").flatMap(Double.init)
+                  let reset = http.value(forHTTPHeaderField: "anthropic-ratelimit-unified-\(tag)-reset").flatMap(Double.init),
+                  util.isFinite, util >= 0, reset.isFinite, reset > 0
             else { return nil }
             return UsageWindow(usedPercent: util * 100, windowMinutes: minutes,
                                resetsAt: Date(timeIntervalSince1970: reset))
@@ -147,9 +189,11 @@ struct UsageCollector: Sendable {
 
         let short = window("5h", 300)
         let long = window("7d", 10080)
-        guard short != nil || long != nil else { return nil }   // 401/403/no headers
-        return ProviderUsage(source: .claudeCode, plan: claudePlan(),
-                             short: short, long: long, snapshotAt: Date())
+        guard short != nil || long != nil else {
+            return .failure(http.statusCode == 429 ? .rateLimited : .missingWindows)
+        }
+        return .success(ProviderUsage(source: .claudeCode, plan: plan,
+                                      short: short, long: long, snapshotAt: now))
     }
 
     private func claudeToken() -> String? {

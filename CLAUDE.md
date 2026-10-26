@@ -4,7 +4,7 @@ macOS 菜单栏水球 + 桌面悬浮窗，实时显示 Codex / Claude Code (CC) 
 需处理 / 已完成）和 5h/周用量**余额**。原生 Swift（SwiftUI + AppKit），Swift Package
 Manager，LSUIElement（无 Dock 图标）。以**源码**分发，各自本机编译 + 通过 GitHub 自更新。
 
-当前已发布版本：**v1.33**（每版"为什么"见 `CHANGELOG.md`）。
+当前发布版本：**v1.34**（每版"为什么"见 `CHANGELOG.md`）。
 
 > **维护须知**：这份文件是本项目的"活文档"，会话进入此文件夹会自动加载它。凡是改动了
 > 编译 / 发版流程、关键约定或踩坑经验（包括上面的版本号），都要顺手同步更新这份 `CLAUDE.md`，
@@ -12,8 +12,8 @@ Manager，LSUIElement（无 Dock 图标）。以**源码**分发，各自本机�
 
 ## 编译 / 运行 / 测试
 - `swift build` / `swift test` —— 编译 + 单测（Swift Testing 框架）。
-- `./script/build_and_run.sh run` —— debug 编译、组装 `.app` 并启动。
-- `./script/build_and_run.sh package` —— release 编译 → `dist/AgentStatusBoard.app`（+ zip）。
+- `./script/build_and_run.sh run` —— debug 编译、安装到 `~/Applications` 后启动稳定副本。
+- `./script/build_and_run.sh package` —— release 编译 → 隐藏 `.build/packaging/AgentStatusBoard.app`，zip 仍在 `dist/`。
   组装完 bundle 后会 **ad-hoc 签名**（`codesign --force --deep --sign -`），见坑 7。
 - `./script/agent-hooks/autostart.sh on` —— 装到 `~/Applications` + 写 LaunchAgent + kickstart，
   然后 **pgrep 轮询确认真的起来了**，没起来就自动 bootout + 重新 bootstrap，最后 `open` 兜底。
@@ -55,6 +55,19 @@ Hook 脚本写状态、Swift App 读状态。
 5. **用量·Codex**：优先实时 `wham/usage`；抓取偶发失败时**保留上次实时值、不要退回本地 rollout
    快照**（快照数字不一样、偏低）。`wham/usage` ≠ rollout 的 `token_count`，是两个不同指标。
 6. 菜单栏水球显示 5h **余量**（100 − used），随消耗 green→amber→red。
+   **CC 授权与错误**：桌面端已登录不代表看板的 `cc-token.json` 已换成新账号。
+   `UsageCollector.claudeUsage()` 返回明确的成功/失败结果；401/403 清除旧账号的用量并显示
+   重新授权提示，网络错误保留上次有效快照。token 文件更新会在下一次 3 秒刷新时触发新查询，
+   并丢弃旧 token 的在途响应。点击刷新也会强制查询用量。禁止把失败伪装成 0% 或一直获取中。
+   授权脚本必须等 CLI 真正成功、捕获完整 token 后才原子替换文件，失败保留旧文件；
+   OAuth 回调等待须保持进程存活，不能停止脚本后继续使用旧链接。所有诊断必须遮盖凭证。
+   **桌面窗口**：标题区域提供独立的 AppKit 拖动入口；按钮和会话行保留点击行为。
+   `NSWindow.performDrag` 立即返回，并不代表拖动完成；只能在鼠标真正释放后保存/校边界，
+   否则会在 WindowServer 接管时重新定位窗口、打断拖动。关闭/移除拖动区必须清理监视器。
+   位置按屏幕可用区域校正，内容尺寸变化不应污染顶部锚点。App 启动时检查相同 bundle ID
+   的旧实例，并持有 OS 文件锁，避免并发启动竞态；重复启动唤回旧窗口。
+   App 已运行时也会结束随后打开的同 bundle ID 旧版副本。只有 `~/Applications` 是稳定运行入口；
+   构建副本藏在 `.build/packaging`，安装成功后仅清理经身份校验的旧 `dist/AgentStatusBoard.app`。
 7. **原地升级必须签名**（自更新命脉）。Swift 链接器只给 binary 一个 linker-signed 签名，
    Info.plist 没绑、resources 没封印。**全新安装能跑，但同一路径整包替换后下一次启动会被
    macOS 打死**：`SIGKILL (Code Signature Invalid)` / CODESIGNING `Launch Constraint Violation`，
@@ -64,9 +77,8 @@ Hook 脚本写状态、Swift App 读状态。
    (b) **绝不给"已安装 + 已注册"的副本补签**——补签会让它和 launchd/BTM 注册对不上，
    变成每次 spawn 都 EX_CONFIG（踩过，只能 bootout 重注册才能救回来）；
    (c) `autostart.sh` 起完必须 pgrep 确认，没起来就 bootout + 重新 bootstrap。
-   **但 bootout 会杀光该 job 里的所有进程，自更新时这个脚本自己就在里面**（App 用
-   `nohup bash /tmp/asb-update.sh &` 拉起，继承了 `XPC_SERVICE_NAME=<label>`）——所以脚本靠
-   `XPC_SERVICE_NAME != $LABEL` 判断"不是自更新上下文"才敢 bootout，自更新场景退到 `open` 兜底。
+   **bootout 会杀光该 job 里的所有进程**。新版更新器用独立 launchd job 执行，允许重注册 App job。
+   为兼容旧版 `nohup` 更新上下文，安装脚本仍保留 `XPC_SERVICE_NAME != $LABEL` 守卫，避免杀掉自己。
 8. **改 `~/.codex/config.toml` 必须按 TOML 结构读、只追加缺失项**（`script/agent-hooks/codex_toml.py`）。
    Codex 保存时会把字符串改成双引号、丢掉注释（包括我们的 `# >>> agent-status-board hooks >>>` 标记）；
    Computer Use 会把 `notify` 改成多行数组，用 `--previous-notify '["\/…\/codex-notify.sh"]'` 串上我们。
@@ -80,6 +92,14 @@ Hook 脚本写状态、Swift App 读状态。
    2026-10-15 发 v1.32 后，未提交改动、未跟踪和被忽略的文件（新测试、`PROJECT_MEMORY.md`）全被抹掉。
    现在检出是 git 工作树（或含 `.git`）就跳过源码刷新（源码用 git 自己更新），照常重装 App、刷新 bin
    副本；zip 安装照旧整目录刷新。改 `update.sh` 后跑 `python3 script/tests/test_self_update.py`。
+10. **更新状态和唯一入口**：更新点击状态由 BoardStore 共享，不能放在视图的永久 `updating=true`。
+    `UpdateChecker` 把 updater 复制到 `~/.agent-status-board/updates/<UUID>/`，通过独立 job bootstrap，
+    updater 优先取 App 自带的 `Resources/update.sh`，避免 git 源码保留旧脚本影响后续更新；
+    读私有 `status.json` / `update.log`；下载、编译、安装、失败均有状态，失败可重试。下载有时限，
+    updater 用互斥锁防并发，安装失败保留并恢复旧 App；成功必须核对稳定二进制完整进程路径。
+    调试/日志/验证也经稳定安装入口，不再 `open -n dist/...`。修改构建/安装后运行
+    `python3 script/tests/test_app_install.py`；Swift 的 launchd smoke 用本地无害 fixture：
+    `ASB_LAUNCHD_SMOKE_TEST=1 swift test --filter updateJobActuallyRunsOutsideTheApplicationJob`。
 
 ## 发版 / 分发
 - `VERSION` 文件是**版本单一来源**。App 每小时比对远端 `raw.githubusercontent.com/.../VERSION`

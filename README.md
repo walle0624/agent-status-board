@@ -47,6 +47,11 @@ bash script/agent-hooks/uninstall.sh   # restore original configs
 Hooks take effect on the next new Claude Code session / Codex restart.
 The app is read-only: it never continues, stops, or mutates any Codex/CC work.
 
+The running installation is always `~/Applications/AgentStatusBoard.app`.
+Build bundles stay in the hidden `.build/packaging/` directory; `dist/` holds
+release zip files. Drag the widget from its top status/title area. In-app updates
+show download/build/install progress, report failures, and allow retrying.
+
 ## 发版（维护者）
 
 改完代码后，一条命令完成「改版本号 + 提交 + 打 tag + 推送 + 建 GitHub Release」：
